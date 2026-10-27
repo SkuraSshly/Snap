@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh-Hans</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hans</string>
+	</array>
+	<key>CFBundleExecutable</key>
+	<string>Snap</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.snap.Snap</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Snap</string>
+	<key>CFBundleDisplayName</key>
+	<string>Snap</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Snap · MIT 许可 · 不联网，不收集任何数据</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<!-- 菜单栏程序：不出现在程序坞，也没有主菜单栏 -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<!-- 关闭 malloc 的大块内存缓存：截图底图（十几 MB）释放后立即还给系统，
+	     否则会一直留在进程里，活动监视器显示的空闲内存偏高 -->
+	<key>LSEnvironment</key>
+	<dict>
+		<key>MallocLargeCache</key>
+		<string>0</string>
+	</dict>
+	<!-- 缺少这一项时，访问麦克风会直接导致进程被系统终止 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Snap 需要使用麦克风，以便在录屏时录制你的声音。</string>
+</dict>
+</plist>
