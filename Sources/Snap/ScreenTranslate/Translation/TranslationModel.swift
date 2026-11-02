@@ -47,6 +47,10 @@ final class TranslationModel: ObservableObject {
     @Published private(set) var isRecognizing = false
     /// 识别失败或没有文字时的提示
     @Published private(set) var recognitionFailure: String?
+    /// 当前使用的翻译引擎（默认引擎来自设置；结果窗口里可以切换）
+    @Published private(set) var engine: EngineID = EngineRouting.preferred
+    /// 默认引擎失败、自动换了别的引擎时的说明（例如「DeepL 失败（额度用完了），已切换到 Apple 翻译」）
+    @Published private(set) var engineNotice: String?
     /// 单个单词或短语时的词典结果（macOS 自带词典，离线）
     @Published private(set) var dictionaryEntry: DictionaryEntry?
     /// 钉住：置顶、点别处不关闭、可以拖动和调整大小
@@ -141,7 +145,65 @@ final class TranslationModel: ObservableObject {
         }
         requestedText = sourceText
         let source = sourceLanguage, target = targetLanguage
+        engineNotice = nil
+        if engine != .apple {
+            translateOnline(text: sourceText, source: source, target: target, chain: fallbackChain(startingWith: engine))
+            return
+        }
+        translateWithApple(source: source, target: target)
+    }
+
+    /// 在结果窗口里换一个引擎重新翻译
+    func use(_ engine: EngineID) {
+        self.engine = engine
+        translate()
+    }
+
+    /// 失败时依次尝试的引擎：先是选中的，再是其他已启用的在线引擎，最后是 Apple 翻译
+    private func fallbackChain(startingWith first: EngineID) -> [EngineID] {
+        let online = EngineRouting.available.filter { $0 != .apple && $0 != first }
+        return [first] + online + (first == .apple ? [] : [.apple])
+    }
+
+    /// 在线引擎翻译；失败就换下一个，并在译文区小字说明（换到 Apple 时走 Apple 的流程）
+    private func translateOnline(text: String, source: TranslateLanguage, target: TranslateLanguage, chain: [EngineID],
+                                 failures: [String] = []) {
+        guard let current = chain.first else { return }
+        if current == .apple {
+            engine = .apple
+            engineNotice = failures.isEmpty ? nil : failures.joined(separator: "；") + "，已切换到 Apple 翻译"
+            translateWithApple(source: source, target: target, keepNotice: true)
+            return
+        }
+        status = .translating
+        isPartial = false
+        Task { @MainActor in
+            let started = ContinuousClock.now
+            do {
+                let output = try await current.translate(text, from: source, to: target)
+                guard text == sourceText, source == sourceLanguage, target == targetLanguage else { return }
+                translation = output
+                status = .done
+                if !failures.isEmpty {
+                    engine = current
+                    engineNotice = failures.joined(separator: "；") + "，已切换到 \(current.displayName)"
+                }
+                Log.capture.notice("截屏翻译：\(current.displayName, privacy: .public) 翻译完成，耗时 \((ContinuousClock.now - started).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
+            } catch is CancellationError {
+            } catch {
+                guard text == sourceText else { return }
+                let reason = "\(current.displayName) 失败（\(error.localizedDescription)）"
+                Log.capture.error("截屏翻译：\(reason, privacy: .public)")
+                translateOnline(text: text, source: source, target: target, chain: Array(chain.dropFirst()),
+                                failures: failures + [reason])
+            }
+        }
+    }
+
+    /// Apple 翻译：语言包已下载时直接翻译（逐段显示），否则通过窗口的 .translationTask（必要时弹下载提示）
+    private func translateWithApple(source: TranslateLanguage, target: TranslateLanguage, keepNotice: Bool = false) {
         #if DEBUG
+        // 自测：用假的 Apple 翻译（自测机器上没有下载语言包，也不能弹下载提示）
         if let stub = Self.debugTranslator {
             status = .translating
             Task { @MainActor in
@@ -185,14 +247,15 @@ final class TranslationModel: ObservableObject {
                     Log.capture.notice("截屏翻译：Apple 翻译完成（直接），耗时 \((ContinuousClock.now - started).formatted(.units(allowed: [.milliseconds])), privacy: .public)，\(source.rawValue, privacy: .public) → \(target.rawValue, privacy: .public)")
                 } catch is CancellationError {
                 } catch {
-                    status = .failed(Self.describe(error))
                     Log.capture.error("截屏翻译：Apple 翻译失败 \(String(describing: error), privacy: .public)")
+                    appleFailed(Self.describe(error), source: source, target: target, alreadyFellBack: keepNotice)
                 }
                 return
             }
             switch availability {
             case .unsupported:
-                status = .failed("Apple 翻译暂不支持「\(source.displayName) → \(target.displayName)」，可以换一种目标语言")
+                appleFailed("Apple 翻译暂不支持「\(source.displayName) → \(target.displayName)」", source: source, target: target,
+                            alreadyFellBack: keepNotice)
                 return
             case .supported:
                 // 没下载语言包：开始翻译时系统会弹出下载提示；把 Snap 切到前台，提示才能点
@@ -208,6 +271,17 @@ final class TranslationModel: ObservableObject {
             } else {
                 configuration = TranslationSession.Configuration(source: source.localeLanguage, target: target.localeLanguage)
             }
+        }
+    }
+
+    /// Apple 翻译失败：有启用的在线引擎就换过去，否则显示原因
+    private func appleFailed(_ reason: String, source: TranslateLanguage, target: TranslateLanguage, alreadyFellBack: Bool) {
+        let online = EngineRouting.available.filter { $0 != .apple }
+        if !alreadyFellBack, !online.isEmpty {
+            translateOnline(text: sourceText, source: source, target: target, chain: online,
+                            failures: ["Apple 翻译失败（\(reason)）"])
+        } else {
+            status = .failed(reason)
         }
     }
 

@@ -632,6 +632,7 @@ enum DebugUITest {
             check.note("这台机器没有英→简中语言包，跳过真实翻译测试")
         }
         // 查词：单个单词或短语时显示系统词典的音标、词性、释义
+        await runEngineChecks(check: check)
         check("只有单词或短语才查词典", DictionaryLookup.shouldLookUp("ubiquitous") && DictionaryLookup.shouldLookUp("take off")
               && DictionaryLookup.shouldLookUp("电脑") && !DictionaryLookup.shouldLookUp("This is a whole sentence.")
               && !DictionaryLookup.shouldLookUp("one two three four five"))
@@ -677,6 +678,60 @@ enum DebugUITest {
         try? await Task.sleep(for: .milliseconds(2300))
         check("结果窗口关闭后，「已复制」提示仍会自动消失", hudWindow != nil && hudWindow?.isVisible == false,
               "提示仍在屏幕上")
+    }
+
+    /// 在线翻译引擎：签名算法对照官方文档的例子、钥匙串读写、默认引擎失败时自动切换（不联网，用假的在线引擎）
+    private static func runEngineChecks(check: Checks) async {
+        // 腾讯 TC3：文档例子（CVM DescribeInstances）的请求体哈希和规范请求哈希
+        let payload = #"{"Limit": 1, "Filters": [{"Values": ["\u672a\u547d\u540d"], "Name": "instance-name"}]}"#
+        let canonical = Tencent.canonicalRequest(host: "cvm.tencentcloudapi.com", action: "DescribeInstances", payload: payload)
+        check("腾讯签名：规范请求与官方文档例子一致",
+              EngineCrypto.sha256Hex(payload) == "35e9c5b0e3ae67532d3c9f17ead6c90222632e5b1ff7f6e89887f1398934f064"
+              && EngineCrypto.sha256Hex(canonical) == "7019a55be8395899b900fb5564e4200d984910f34794a27cb3fb7d10ff6a1e84")
+        // 百度：文档例子 appid=2015063000000001 q=apple salt=1435660288 密钥=12345678
+        check("百度签名与官方文档例子一致",
+              Baidu.sign("apple", appid: "2015063000000001", salt: "1435660288", secret: "12345678") == "f89f9594663708c1605f3d736d01d2d4")
+        // 有道：超过 20 个字符时 input = 前 10 + 长度 + 后 10
+        let long = "abcdefghijKLMNOPQRSTUVWXYZ0123456789"
+        let expectedInput: String = "k" + "abcdefghij" + "36" + "0123456789" + "s1x"
+        let youdaoSign: String = Youdao.sign(long, appKey: "k", salt: "s", curtime: "1", secret: "x")
+        check("有道签名：长文本按「前 10 + 长度 + 后 10」计算", youdaoSign == EngineCrypto.sha256Hex(expectedInput))
+        check("DeepL：Free 版 Key（:fx 结尾）用 api-free", DeepL.endpoint(for: "abc:fx").host == "api-free.deepl.com"
+              && DeepL.endpoint(for: "abc").host == "api.deepl.com")
+
+        // 钥匙串：写入、读出、删除
+        let saved = EngineID.youdao.fields.map { ($0.key, EngineID.youdao.credential($0.key)) }
+        EngineID.youdao.setCredential("test-app-key", for: "appKey")
+        EngineID.youdao.setCredential("test-secret", for: "appSecret")
+        check("Key 保存在钥匙串里，读得回来", EngineID.youdao.credential("appKey") == "test-app-key" && EngineID.youdao.hasCredentials)
+
+        // 默认引擎（有道）失败 → 自动换到下一个（Apple 翻译，自测里是假的），译文区说明
+        let prefs = Preferences.shared
+        let savedEnabled = prefs.enabledEngines, savedDefault = prefs.defaultEngine
+        prefs.enabledEngines = ["youdao"]
+        prefs.defaultEngine = "youdao"
+        check("启用并填了 Key 的引擎可以选为默认", EngineRouting.available == [.apple, .youdao] && EngineRouting.preferred == .youdao)
+        EngineID.debugOnline = { engine, _ in throw EngineError.quotaExceeded }
+        let model = TranslationModel(result: OCRResult(text: "Hello world", language: .english, confidence: 1, lines: []),
+                                     recognitionTime: .milliseconds(100))
+        check("新窗口用默认引擎", model.engine == .youdao)
+        model.translate()
+        try? await Task.sleep(for: .milliseconds(400))
+        check("默认引擎失败时自动切换，并说明原因", model.engine == .apple && model.status == .done
+              && model.engineNotice?.contains("有道智云 失败（额度用完了或账户欠费）") == true
+              && model.engineNotice?.contains("已切换到 Apple 翻译") == true, String(describing: model.engineNotice))
+        EngineID.debugOnline = { engine, text in "[\(engine.rawValue)] \(text)" }
+        model.use(.youdao)
+        try? await Task.sleep(for: .milliseconds(300))
+        check("在结果窗口里换引擎重新翻译", model.engine == .youdao && model.translation == "[youdao] Hello world"
+              && model.engineNotice == nil)
+        EngineID.debugOnline = nil
+
+        // 恢复
+        prefs.enabledEngines = savedEnabled
+        prefs.defaultEngine = savedDefault
+        for (key, value) in saved { EngineID.youdao.setCredential(value, for: key) }
+        check("自测写入的 Key 已从钥匙串删除", EngineID.youdao.credential("appKey") == saved.first { $0.0 == "appKey" }?.1)
     }
 
     /// 识别服务进程（SnapOCR.xpc）是否在运行

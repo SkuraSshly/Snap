@@ -29,7 +29,7 @@
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Snap · MIT 许可 · 不联网，不收集任何数据</string>
+	<string>Snap · MIT 许可 · 默认不联网，不收集任何数据</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<!-- 菜单栏程序：不出现在程序坞，也没有主菜单栏 -->

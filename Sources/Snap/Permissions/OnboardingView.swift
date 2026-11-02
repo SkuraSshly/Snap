@@ -62,7 +62,7 @@ struct OnboardingView: View {
                 Text("欢迎使用 Snap")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.warmInk)
-                Text("截图、录屏和截屏翻译需要以下系统权限。所有处理都在本机完成，Snap 不联网，也不收集任何数据。")
+                Text("截图、录屏和截屏翻译需要以下系统权限。所有处理都在本机完成；Snap 默认不联网（只有你在设置里启用的在线翻译引擎会联网），也不收集任何数据。")
                     .settingsCaption()
             }
         }

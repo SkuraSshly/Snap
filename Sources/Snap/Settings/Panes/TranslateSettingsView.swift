@@ -1,9 +1,10 @@
 import SnapOCRKit
 import SwiftUI
 
-/// 截屏翻译：文字识别（快捷键在「快捷键」里）。翻译引擎、目标语言、结果窗口、历史记录在后续阶段加入这里。
+/// 截屏翻译：文字识别、翻译引擎、结果窗口（快捷键在「快捷键」里）
 struct TranslateSettingsView: View {
     @ObservedObject private var prefs = Preferences.shared
+    @ObservedObject private var engines = EngineSettingsModel.shared
 
     /// OCR 优先语言的选项（常用的几种；空字符串 = 跟随系统）
     private static let languages: [TranslateLanguage] = [
@@ -33,6 +34,20 @@ struct TranslateSettingsView: View {
                           caption: "二维码的内容附在文字后面", isOn: $prefs.ocrDetectsQRCodes)
             }
 
+            SettingsSection(title: "翻译引擎",
+                            footer: "Apple 翻译离线、免费。在线引擎默认全部关闭；启用并填写 Key 后才会联网，原文只发送给所选的服务商。Key 保存在钥匙串里。默认引擎失败时会自动换到下一个可用的引擎。") {
+                SettingsRow(icon: "star.fill", tint: .apricot, title: "默认引擎", isFirst: true) {
+                    Picker("", selection: $prefs.defaultEngine) {
+                        ForEach(engines.selectable) { Text($0.displayName).tag($0.rawValue) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                ForEach(EngineID.allCases.filter { $0 != .apple }) { engine in
+                    EngineRow(engine: engine, model: engines)
+                }
+            }
+
             SettingsSection(title: "结果窗口",
                             footer: "窗口里的快捷键：⌘C 复制译文、⇧⌘C 复制原文、⌘R 重新翻译、⌘P 钉住 / 取消钉住、Esc 关闭。") {
                 SwitchRow(icon: "pin.fill", tint: .apricot, title: "默认钉住",
@@ -46,6 +61,131 @@ struct TranslateSettingsView: View {
                             isFirst: true) {
                     EmptyView()
                 }
+            }
+        }
+    }
+}
+
+/// 翻译引擎设置的界面状态：Key 输入框的内容（读写钥匙串）、测试结果
+@MainActor
+final class EngineSettingsModel: ObservableObject {
+    static let shared = EngineSettingsModel()
+
+    @Published private var values: [String: String] = [:]
+    @Published private(set) var testResults: [EngineID: (ok: Bool, text: String)] = [:]
+    @Published private(set) var testing: Set<EngineID> = []
+
+    /// 默认引擎可选的：Apple 翻译 + 已启用并填了 Key 的引擎
+    var selectable: [EngineID] {
+        _ = values   // 填了 Key 后刷新
+        return EngineRouting.available
+    }
+
+    func isEnabled(_ engine: EngineID) -> Bool { Preferences.shared.enabledEngines.contains(engine.rawValue) }
+
+    func setEnabled(_ engine: EngineID, _ enabled: Bool) {
+        var list = Preferences.shared.enabledEngines.filter { $0 != engine.rawValue }
+        if enabled { list.append(engine.rawValue) }
+        Preferences.shared.enabledEngines = list
+        if !enabled, Preferences.shared.defaultEngine == engine.rawValue { Preferences.shared.defaultEngine = EngineID.apple.rawValue }
+        objectWillChange.send()
+    }
+
+    /// 输入框绑定：读的时候从钥匙串取，改的时候写回钥匙串
+    func binding(_ engine: EngineID, _ field: String) -> Binding<String> {
+        let key = "\(engine.rawValue).\(field)"
+        return Binding(
+            get: { [weak self] in self?.values[key] ?? engine.credential(field) },
+            set: { [weak self] value in
+                self?.values[key] = value
+                engine.setCredential(value, for: field)
+                self?.testResults[engine] = nil
+            }
+        )
+    }
+
+    /// 测试：把「Hello, world.」翻译成简体中文
+    func test(_ engine: EngineID) {
+        testing.insert(engine)
+        testResults[engine] = nil
+        Task { @MainActor in
+            defer { testing.remove(engine) }
+            do {
+                let output = try await engine.translate("Hello, world.", from: .english, to: .simplifiedChinese)
+                testResults[engine] = (true, "可以使用：Hello, world. → \(output)")
+            } catch {
+                testResults[engine] = (false, error.localizedDescription)
+            }
+        }
+    }
+}
+
+/// 一个在线引擎：开关；启用后显示 Key 输入框、测试按钮、申请 Key 的链接
+private struct EngineRow: View {
+    let engine: EngineID
+    @ObservedObject var model: EngineSettingsModel
+
+    private var tint: Color {
+        switch engine {
+        case .youdao: .coral
+        case .deepl: .chipSky
+        case .azure: .chipLavender
+        case .baidu: .chipHoney
+        case .tencent: .chipSage
+        default: .chipCocoa
+        }
+    }
+
+    var body: some View {
+        let enabled = model.isEnabled(engine)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(icon: "globe.asia.australia.fill", tint: tint, title: engine.displayName,
+                        caption: enabled ? (engine.hasCredentials ? "已启用" : "已启用 · 还没有填写 Key") : "未启用") {
+                Toggle("", isOn: Binding(get: { enabled }, set: { model.setEnabled(engine, $0) }))
+                    .toggleStyle(WarmSwitchStyle())
+                    .labelsHidden()
+            }
+            if enabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(engine.fields, id: \.key) { field in
+                        HStack(spacing: 8) {
+                            Text(field.label)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.warmSecondary)
+                                .frame(width: 110, alignment: .trailing)
+                            Group {
+                                if field.secret {
+                                    SecureField(field.placeholder, text: model.binding(engine, field.key))
+                                } else {
+                                    TextField(field.placeholder, text: model.binding(engine, field.key))
+                                }
+                            }
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Spacer().frame(width: 110)
+                        Button(model.testing.contains(engine) ? "测试中…" : "测试") { model.test(engine) }
+                            .buttonStyle(WarmButtonStyle(prominent: true))
+                            .disabled(model.testing.contains(engine) || !engine.hasCredentials)
+                        if let url = engine.consoleURL {
+                            Link("申请 Key", destination: url)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.apricot)
+                        }
+                        Spacer()
+                    }
+                    if let result = model.testResults[engine] {
+                        Label(result.text, systemImage: result.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .font(.system(size: 11.5, design: .rounded))
+                            .foregroundStyle(result.ok ? Color.chipSage : Color.coral)
+                            .padding(.leading, 118)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 13)
+                .padding(.bottom, 12)
             }
         }
     }

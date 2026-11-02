@@ -77,6 +77,7 @@ final class Preferences: ObservableObject {
         case gifFrameRate, gifMaxWidth
         case screenshotHotkey, recordingHotkey, translateHotkey
         case ocrSmartLayout, ocrDetectsQRCodes, ocrPreferredLanguage, translateWindowPinnedByDefault
+        case enabledEngines, defaultEngine
     }
 
     // MARK: 通用
@@ -121,6 +122,10 @@ final class Preferences: ObservableObject {
     @Published var ocrSmartLayout: Bool { didSet { Self.save(ocrSmartLayout, .ocrSmartLayout) } }
     /// 同时识别二维码（默认关闭）
     @Published var ocrDetectsQRCodes: Bool { didSet { Self.save(ocrDetectsQRCodes, .ocrDetectsQRCodes) } }
+    /// 启用的在线翻译引擎（EngineID 的 rawValue；默认全部关闭）
+    @Published var enabledEngines: [String] { didSet { Self.save(enabledEngines, .enabledEngines) } }
+    /// 默认翻译引擎（EngineID 的 rawValue，默认 Apple 翻译）
+    @Published var defaultEngine: String { didSet { Self.save(defaultEngine, .defaultEngine) } }
     /// 截屏翻译的结果窗口默认钉住
     @Published var translateWindowPinnedByDefault: Bool { didSet { Self.save(translateWindowPinnedByDefault, .translateWindowPinnedByDefault) } }
     /// OCR 优先语言（TranslateLanguage 的 rawValue），空字符串表示跟随系统语言
@@ -170,6 +175,8 @@ final class Preferences: ObservableObject {
         ocrDetectsQRCodes = Self.load(.ocrDetectsQRCodes, false)
         ocrPreferredLanguage = Self.load(.ocrPreferredLanguage, "")
         translateWindowPinnedByDefault = Self.load(.translateWindowPinnedByDefault, false)
+        enabledEngines = Self.load(.enabledEngines, [String]())
+        defaultEngine = Self.load(.defaultEngine, "apple")
 
         screenshotHotkey = Hotkey(stored: Self.load(.screenshotHotkey, [Int]())) ?? .defaultScreenshot
         recordingHotkey = Hotkey(stored: Self.load(.recordingHotkey, [Int]())) ?? .defaultRecording

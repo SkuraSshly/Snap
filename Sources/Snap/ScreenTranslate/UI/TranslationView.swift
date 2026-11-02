@@ -151,15 +151,54 @@ struct TranslationView: View {
                 }
             }
             .font(.system(size: 14))
+            if let notice = model.engineNotice {
+                Label(notice, systemImage: "arrow.triangle.branch")
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(Color.apricot)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(spacing: 4) {
                 speakButton(model.translation, language: model.targetLanguage, id: "translation")
                 copyButton(model.translation, hint: "已复制译文")
                 Spacer()
-                Text("Apple 翻译 · 离线")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.warmSecondary)
+                engineMenu
             }
         }
+    }
+
+    /// 引擎下拉框：显示当前引擎，可以换成其他已启用的引擎重新翻译
+    private var engineMenu: some View {
+        Menu {
+            ForEach(EngineRouting.available) { engine in
+                Button {
+                    model.use(engine)
+                } label: {
+                    if engine == model.engine {
+                        Label(engine.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(engine.displayName)
+                    }
+                }
+            }
+            Divider()
+            Button("设置翻译引擎…") { SettingsWindowController.show(.translate) }
+        } label: {
+            HStack(spacing: 3) {
+                Text(model.engine == .apple ? "Apple 翻译 · 离线" : model.engine.displayName)
+                Image(systemName: "chevron.down").font(.system(size: 7.5, weight: .bold))
+            }
+            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .foregroundStyle(Color.warmSecondary)
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(Capsule().fill(Color.warmTrack.opacity(0.7)))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("翻译引擎")
     }
 
     private var translationText: some View {

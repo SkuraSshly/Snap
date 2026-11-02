@@ -212,7 +212,7 @@ private struct SettingsSidebar: View {
             .padding(.horizontal, 10)
 
             Spacer()
-            Text("Snap \(version)\n不联网 · 不收集任何数据")
+            Text("Snap \(version)\n默认不联网 · 不收集任何数据")
                 .font(.system(size: 10.5, design: .rounded))
                 .foregroundStyle(Color.warmSecondary)
                 .lineSpacing(2)
