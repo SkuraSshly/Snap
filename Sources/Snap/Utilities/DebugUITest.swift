@@ -631,6 +631,34 @@ enum DebugUITest {
         } else {
             check.note("这台机器没有英→简中语言包，跳过真实翻译测试")
         }
+        // 查词：单个单词或短语时显示系统词典的音标、词性、释义
+        check("只有单词或短语才查词典", DictionaryLookup.shouldLookUp("ubiquitous") && DictionaryLookup.shouldLookUp("take off")
+              && DictionaryLookup.shouldLookUp("电脑") && !DictionaryLookup.shouldLookUp("This is a whole sentence.")
+              && !DictionaryLookup.shouldLookUp("one two three four five"))
+        if let entry = DictionaryLookup.lookUp("ubiquitous") {
+            check("查词：音标、词性、释义", entry.headword == "ubiquitous" && entry.phonetics.map(\.label) == ["英", "美"]
+                  && entry.parts.first?.name == "形容词" && entry.parts.first?.senses.first?.gloss.contains("普遍") == true,
+                  "\(entry)")
+            let dictModel = TranslationModel(result: OCRResult(text: "ubiquitous", language: .english, confidence: 1, lines: []),
+                                             recognitionTime: .milliseconds(120))
+            let dictWindow = TranslationWindow(model: dictModel, near: window.frame.offsetBy(dx: -480, dy: 0))
+            dictWindow.show()
+            try? await Task.sleep(for: .milliseconds(500))
+            check("结果窗口里显示词典卡片", dictModel.dictionaryEntry?.headword == "ubiquitous")
+            if let screen = NSScreen.screen(containing: CGPoint(x: dictWindow.frame.midX, y: dictWindow.frame.midY)),
+               let image = DebugShowcase.desktopImage(for: screen) {
+                let backdrop = DebugShowcase.makeBackdrop(for: screen, image: image, level: .normal)
+                try? await Task.sleep(for: .milliseconds(400))
+                await DebugShowcase.captureWindow(dictWindow.debugWindow, name: "12d-查词.png", dir: dir)
+                backdrop.close()
+            }
+            dictModel.sourceText = "This is a whole sentence, not a single word."
+            try? await Task.sleep(for: .milliseconds(900))
+            check("改成句子后不再显示词典", dictModel.dictionaryEntry == nil)
+            dictWindow.close(reason: "自测")
+        } else {
+            check.note("这台机器的「词典」App 里没有启用英汉词典，跳过查词测试")
+        }
         check("译文混入繁体字时统一成简体", LanguageRules.normalizedChinese("傳統字符與簡化字符不同", target: .simplifiedChinese) == "传统字符与简化字符不同"
               && LanguageRules.normalizedChinese("Hello 世界", target: .simplifiedChinese) == "Hello 世界"
               && LanguageRules.normalizedChinese("简体中文", target: .traditionalChinese) == "簡體中文")

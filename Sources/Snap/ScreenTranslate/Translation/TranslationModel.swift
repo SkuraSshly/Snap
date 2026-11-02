@@ -26,6 +26,7 @@ final class TranslationModel: ObservableObject {
             guard sourceText != oldValue, !isLoading else { return }
             detected = detector.detect(sourceText) ?? detected
             scheduleTranslation()
+            if !DictionaryLookup.shouldLookUp(sourceText) { dictionaryEntry = nil }
         }
     }
     /// 用户选的原文语言；nil 表示自动检测
@@ -46,6 +47,8 @@ final class TranslationModel: ObservableObject {
     @Published private(set) var isRecognizing = false
     /// 识别失败或没有文字时的提示
     @Published private(set) var recognitionFailure: String?
+    /// 单个单词或短语时的词典结果（macOS 自带词典，离线）
+    @Published private(set) var dictionaryEntry: DictionaryEntry?
     /// 钉住：置顶、点别处不关闭、可以拖动和调整大小
     @Published var isPinned = false
     /// 用户拖过窗口边缘调整了大小：之后内容自适应窗口，而不是窗口随内容变高
@@ -70,6 +73,7 @@ final class TranslationModel: ObservableObject {
         detected = result.language ?? LanguageDetector(preferredLanguages: TranslateLanguage.systemPreferred).detect(result.text)
         self.recognitionTime = recognitionTime
         isLoading = false
+        lookUpDictionary()
     }
 
     /// 还在识别：窗口先出现，显示占位，识别结果出来后调用 didRecognize
@@ -88,6 +92,21 @@ final class TranslationModel: ObservableObject {
         isRecognizing = false
         isLoading = false
         translate()
+        lookUpDictionary()
+    }
+
+    /// 单个单词或短语：查系统词典（在后台查，查完时原文没变才显示）
+    private func lookUpDictionary() {
+        let text = sourceText
+        guard DictionaryLookup.shouldLookUp(text) else {
+            dictionaryEntry = nil
+            return
+        }
+        Task { @MainActor in
+            let entry = await Task.detached(priority: .userInitiated) { DictionaryLookup.lookUp(text) }.value
+            guard text == sourceText else { return }
+            dictionaryEntry = entry
+        }
     }
 
     func markSlowRecognition() { isSlowRecognition = true }
@@ -107,6 +126,7 @@ final class TranslationModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
             self?.translate()
+            self?.lookUpDictionary()
         }
     }
 

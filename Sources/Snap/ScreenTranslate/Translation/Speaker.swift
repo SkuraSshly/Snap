@@ -31,6 +31,21 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         synthesizer.speak(utterance)
     }
 
+    /// 按指定口音朗读（词典里的英式 / 美式发音），voiceLanguage 例如 en-GB、en-US、zh-CN
+    func toggle(_ text: String, voiceLanguage: String, id: String) {
+        if speakingID == id {
+            stop()
+            return
+        }
+        stop()
+        let utterance = AVSpeechUtterance(string: text)
+        let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == voiceLanguage }
+        utterance.voice = voices.max { $0.quality.rawValue < $1.quality.rawValue } ?? AVSpeechSynthesisVoice(language: voiceLanguage)
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        speakingID = id
+        synthesizer.speak(utterance)
+    }
+
     func stop() {
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         speakingID = nil

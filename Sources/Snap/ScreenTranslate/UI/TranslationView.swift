@@ -24,6 +24,9 @@ struct TranslationView: View {
         VStack(spacing: 10) {
             header
             sourceCard
+            if let entry = model.dictionaryEntry {
+                DictionaryCard(entry: entry, speaker: speaker)
+            }
             translationCard
             footer
         }
@@ -253,6 +256,89 @@ private struct PlaceholderLines: View {
         .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
         .padding(.top, 4)
         .accessibilityLabel("正在识别")
+    }
+}
+
+/// 词典卡片：词条、英 / 美音标（点一下朗读）、词性和释义（每条一个例句）
+private struct DictionaryCard: View {
+    let entry: DictionaryEntry
+    @ObservedObject var speaker: Speaker
+
+    var body: some View {
+        Card(tint: Color.chipSky.opacity(0.06)) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(entry.headword)
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.warmInk)
+                    .textSelection(.enabled)
+                ForEach(entry.phonetics.indices, id: \.self) { index in
+                    phonetic(entry.phonetics[index], id: "phonetic-\(index)")
+                }
+                Spacer(minLength: 0)
+            }
+            ForEach(entry.parts.indices, id: \.self) { index in
+                let part = entry.parts[index]
+                VStack(alignment: .leading, spacing: 5) {
+                    if !part.name.isEmpty {
+                        Text(part.name)
+                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.chipSky)
+                            .padding(.horizontal, 7)
+                            .frame(height: 18)
+                            .background(Capsule().fill(Color.chipSky.opacity(0.14)))
+                    }
+                    ForEach(part.senses.indices, id: \.self) { number in
+                        let sense = part.senses[number]
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("\(number + 1).")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color.warmSecondary)
+                                .frame(width: 16, alignment: .trailing)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(sense.gloss)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Color.warmInk)
+                                if let example = sense.example {
+                                    Text(example)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(Color.warmSecondary)
+                                }
+                            }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Text("词典 · macOS 自带")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.warmSecondary)
+            }
+        }
+    }
+
+    /// 音标胶囊：「英 /ˈapl/ 🔊」，点一下用对应口音朗读
+    private func phonetic(_ phonetic: DictionaryEntry.Phonetic, id: String) -> some View {
+        let speaking = speaker.speakingID == id
+        return Button {
+            speaker.toggle(entry.headword, voiceLanguage: phonetic.voiceLanguage, id: id)
+        } label: {
+            HStack(spacing: 4) {
+                if !phonetic.label.isEmpty {
+                    Text(phonetic.label).font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+                Text("/\(phonetic.text)/").font(.system(size: 12))
+                Image(systemName: speaking ? "stop.fill" : "speaker.wave.2.fill").font(.system(size: 9.5, weight: .semibold))
+            }
+            .foregroundStyle(speaking ? Color.white : Color.warmInk)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Capsule().fill(speaking ? AnyShapeStyle(Color.apricot) : AnyShapeStyle(Color.warmTrack)))
+        }
+        .buttonStyle(.plain)
+        .help("朗读（\(phonetic.label.isEmpty ? "普通话" : phonetic.label + "式发音")）")
     }
 }
 
