@@ -342,7 +342,7 @@ enum DebugUITest {
         }
         /// 按 ⌥D 开始一次截屏翻译
         func begin() async -> ScreenshotSession? {
-            controller.debugPreview?.close()
+            if let window = controller.debugPreview, !window.model.isPinned { window.close() }
             controller.debugHUD?.close()
             coordinator.handleHotkey(.translate)
             try? await Task.sleep(for: .milliseconds(600))
@@ -455,6 +455,62 @@ enum DebugUITest {
         controller.debugPreview?.debugPressEscape()
         check("结果面板按 Esc 关闭", controller.debugPreview == nil)
 
+        // 钉住：点别处不关闭；新的截屏翻译不影响钉住的窗口；可以调整大小；窗口快捷键
+        func translateText() async -> TranslationWindow? {
+            guard let session = await begin() else { return nil }
+            session.overlayMouseDown(at: g(210, 570))
+            session.overlayMouseDragged(to: g(350, 500))
+            session.overlayMouseDragged(to: g(490, 430))
+            session.overlayMouseUp(at: g(490, 430))
+            await controller.debugWait()
+            return controller.debugPreview
+        }
+        if let first = await translateText() {
+            check("⌘P 钉住：图钉高亮、可以调整大小", first.debugPress("p", .command) && first.model.isPinned
+                  && first.debugWindow.styleMask.contains(.resizable) && controller.debugPinned.count == 1)
+            check("钉住后左上角不出现红绿灯（不挡住语言栏）", [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+                .allSatisfy { first.debugWindow.standardWindowButton($0)?.isHidden != false })
+            first.debugClickOutside()
+            check("钉住的窗口点别处不关闭", first.isVisible)
+            if let second = await translateText() {
+                check("再次截屏翻译生成新窗口，钉住的窗口保留", second !== first && first.isVisible && second.isVisible
+                      && !second.model.isPinned && controller.debugPinned.count == 1)
+                second.debugClickOutside()
+                check("没钉住的窗口点别处关闭", !second.isVisible && first.isVisible)
+            }
+            // 拖边缘调整大小：之后内容变化不再改窗口高度
+            first.windowWillStartLiveResize(Notification(name: NSWindow.willStartLiveResizeNotification))
+            var big = first.frame
+            big.size = CGSize(width: 560, height: 520)
+            first.debugWindow.setFrame(big, display: true)
+            first.model.translate()
+            try? await Task.sleep(for: .milliseconds(400))
+            check("钉住的窗口调整大小后保持用户设的大小", abs(first.frame.width - 560) < 1 && abs(first.frame.height - 520) < 1,
+                  "\(first.frame)")
+            // 快捷键
+            testPasteboard.clearContents()
+            check("⇧⌘C 复制原文", first.debugPress("c", [.command, .shift])
+                  && testPasteboard.string(forType: .string) == first.model.sourceText)
+            check("⌘C 复制译文", first.debugPress("c", .command)
+                  && testPasteboard.string(forType: .string) == first.model.translation && !first.model.translation.isEmpty)
+            first.debugPress("r", .command)
+            check("⌘R 重新翻译", first.model.isPending || first.model.status == .done)
+            try? await Task.sleep(for: .milliseconds(300))
+            check("⌘P 取消钉住：回到默认宽度、不能调整大小", first.debugPress("p", .command) && !first.model.isPinned
+                  && !first.debugWindow.styleMask.contains(.resizable) && abs(first.frame.width - TranslationView.width) < 1
+                  && controller.debugPinned.isEmpty)
+            first.debugPress("p", .command)
+            first.debugPressEscape()
+            check("钉住的窗口按 Esc 也关闭", !first.isVisible && controller.debugPinned.isEmpty)
+        }
+        let savedPinned = Preferences.shared.translateWindowPinnedByDefault
+        Preferences.shared.translateWindowPinnedByDefault = true
+        if let window = await translateText() {
+            check("设置「默认钉住」后新窗口直接钉住", window.model.isPinned && controller.debugPinned.contains { $0 === window })
+        }
+        Preferences.shared.translateWindowPinnedByDefault = savedPinned
+        controller.debugCloseAll()
+
         // 取消
         if let session = await begin() {
             _ = session.overlayKeyDown(key(kVK_Escape))
@@ -506,6 +562,10 @@ enum DebugUITest {
             let backdrop = DebugShowcase.makeBackdrop(for: screen, image: image, level: .normal)
             try? await Task.sleep(for: .milliseconds(400))
             await DebugShowcase.captureWindow(window.debugWindow, name: "12-翻译结果窗口.png", dir: dir)
+            window.setPinned(true)
+            try? await Task.sleep(for: .milliseconds(400))
+            await DebugShowcase.captureWindow(window.debugWindow, name: "12c-钉住.png", dir: dir)
+            window.setPinned(false)
             // 识别中的样子（占位线）
             let waiting = TranslationWindow(model: TranslationModel(recognizing: ()), near: window.frame.offsetBy(dx: -500, dy: 0))
             waiting.show()

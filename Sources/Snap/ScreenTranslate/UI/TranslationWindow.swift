@@ -8,10 +8,15 @@ import SwiftUI
 /// - 用带标题栏（但隐藏）的面板：系统的「下载语言包」提示需要能挂在窗口上
 /// - 不激活 Snap 也能成为焦点窗口：可以直接编辑原文、按 Esc
 /// - 内容变高时（译文出来、原文变长）保持顶边不动，向下长，不跳动
-/// - 点窗口外面或按 Esc 关闭（下载提示显示时不关闭）
+/// - 没钉住：点窗口外面或按 Esc 关闭（下载提示显示时不关闭）
+/// - 钉住（图钉按钮或 ⌘P）：置顶，点别处不关闭，可以拖到任何地方、拖边缘调整大小；关闭按钮或 Esc 关闭。
+///   可以同时钉住多个窗口，每次截屏翻译都会生成新窗口
+/// - 快捷键（窗口是焦点时）：⌘C 复制译文（选中了文字时复制选中的文字）、⇧⌘C 复制原文、⌘R 重新翻译、⌘P 钉住 / 取消钉住、Esc 关闭
 @MainActor
 final class TranslationWindow: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
+    /// 钉住 / 取消钉住时通知（截屏翻译的总调度据此管理多个窗口）
+    var onPinChange: ((Bool) -> Void)?
 
     let model: TranslationModel
     private let window: KeyablePanel
@@ -39,16 +44,17 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
                               backing: .buffered, defer: true)
         var close: () -> Void = {}
         var copy: (String, String) -> Void = { _, _ in }
-        host = NSHostingController(rootView: TranslationView(model: model, onClose: { close() }, onCopy: { copy($0, $1) }))
+        var togglePin: () -> Void = {}
+        host = NSHostingController(rootView: TranslationView(model: model, onClose: { close() }, onCopy: { copy($0, $1) },
+                                                             onTogglePin: { togglePin() }))
         super.init()
         close = { [weak self] in self?.close(reason: "关闭按钮") }
         copy = { [weak self] text, hint in self?.copy(text, hint: hint) }
+        togglePin = { [weak self] in self.map { $0.setPinned(!$0.model.isPinned) } }
 
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            window.standardWindowButton(button)?.isHidden = true
-        }
+        hideStandardButtons()
         window.isOpaque = false
         window.backgroundColor = .clear
         window.level = .floating
@@ -64,6 +70,8 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
         window.contentViewController = host
         let size = fittingSize()
         window.setFrame(Self.placement(for: size, near: rect), display: false)
+        window.minSize = CGSize(width: 340, height: 220)
+        if Preferences.shared.translateWindowPinnedByDefault { applyPinned(true) }
         // 内容变化（译文出来、原文变长）时调整高度
         changes = model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.fitHeight() }
@@ -78,6 +86,43 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
         installMonitors()
     }
 
+    // MARK: - 钉住
+
+    func setPinned(_ pinned: Bool) {
+        guard pinned != model.isPinned, !isClosed else { return }
+        applyPinned(pinned)
+        Log.capture.notice("截屏翻译：结果窗口\(pinned ? "钉住" : "取消钉住", privacy: .public)")
+        onPinChange?(pinned)
+    }
+
+    /// 隐藏左上角的红绿灯（窗口自己有关闭按钮）；改 styleMask 后系统会把它们重新显示出来，要再隐藏一次
+    private func hideStandardButtons() {
+        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(button)?.isHidden = true
+        }
+    }
+
+    private func applyPinned(_ pinned: Bool) {
+        model.isPinned = pinned
+        defer { hideStandardButtons() }
+        if pinned {
+            window.styleMask.insert(.resizable)
+        } else {
+            // 取消钉住：回到默认宽度、高度随内容
+            window.styleMask.remove(.resizable)
+            model.isFreeSized = false
+            var frame = window.frame
+            frame.size.width = TranslationView.width
+            window.setFrame(frame, display: true)
+            DispatchQueue.main.async { [weak self] in self?.fitHeight() }
+        }
+    }
+
+    /// 用户开始拖边缘调整大小：内容改成填满窗口
+    func windowWillStartLiveResize(_ notification: Notification) {
+        model.isFreeSized = true
+    }
+
     // MARK: - 尺寸与位置
 
     /// 内容在固定宽度下的理想高度
@@ -90,7 +135,7 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
 
     /// 高度跟着内容变，顶边不动；超出屏幕底部时整体上移
     private func fitHeight() {
-        guard !isClosed else { return }
+        guard !isClosed, !model.isFreeSized else { return }
         let size = fittingSize()
         var frame = window.frame
         guard abs(frame.height - size.height) > 0.5 else { return }
@@ -141,10 +186,7 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
     private func installMonitors() {
         // 点击窗口外面（其他 App 或 Snap 的其他窗口）就关闭；正在显示下载提示时不关
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.window.attachedSheet == nil else { return }
-                self.close(reason: "点击了其他 App")
-            }
+            MainActor.assumeIsolated { self?.clickedOutside(reason: "点击了其他 App") }
         }) { monitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown], handler: { [weak self] event in
             MainActor.assumeIsolated { self?.handleLocal(event) ?? event }
@@ -155,21 +197,41 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
     private func handleLocal(_ event: NSEvent) -> NSEvent? {
         guard !isClosed else { return event }
         if event.type != .keyDown {
-            if event.window !== window, event.window?.sheetParent !== window, window.attachedSheet == nil {
-                close(reason: "点击了 Snap 的其他窗口")
+            if event.window !== window, event.window?.sheetParent !== window {
+                clickedOutside(reason: "点击了 Snap 的其他窗口")
             }
             return event
         }
         guard event.window === window else { return event }
         let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
         if event.keyCode == 53, modifiers.isEmpty {
-            // 输入法正在组字时 Esc 交给输入法
+            // 输入法正在组字时 Esc 交给输入法；钉住的窗口按 Esc 也关闭
             if let editor = window.firstResponder as? NSTextView, editor.hasMarkedText() { return event }
             close(reason: "Esc")
             return nil
         }
         guard modifiers == .command || modifiers == [.command, .shift] else { return event }
-        let action: Selector? = switch (event.charactersIgnoringModifiers?.lowercased(), modifiers) {
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        // 结果窗口自己的快捷键
+        switch (key, modifiers) {
+        case ("c", .command):
+            // 选中了文字时复制选中的文字（标准行为），否则复制译文
+            if let editor = window.firstResponder as? NSTextView, editor.selectedRange().length > 0 { break }
+            copy(model.translation, hint: "已复制译文")
+            return nil
+        case ("c", [.command, .shift]):
+            copy(model.sourceText, hint: "已复制原文")
+            return nil
+        case ("r", .command):
+            model.translate()
+            return nil
+        case ("p", .command):
+            setPinned(!model.isPinned)
+            return nil
+        default:
+            break
+        }
+        let action: Selector? = switch (key, modifiers) {
         case ("c", .command): #selector(NSText.copy(_:))
         case ("v", .command): #selector(NSText.paste(_:))
         case ("x", .command): #selector(NSText.cut(_:))
@@ -180,6 +242,12 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
         }
         guard let action else { return event }
         return NSApp.sendAction(action, to: nil, from: window) ? nil : event
+    }
+
+    /// 点了窗口外面：没钉住就关闭（显示下载提示时不关）；钉住的不动
+    private func clickedOutside(reason: String) {
+        guard !isClosed, !model.isPinned, window.attachedSheet == nil else { return }
+        close(reason: reason)
     }
 
     func close(reason: String = "新的识别结果") {
@@ -201,6 +269,15 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
                                          windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
                                          charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
     }
+    /// 自测：模拟按下快捷键（例如 "p", [.command]）
+    @discardableResult
+    func debugPress(_ key: String, _ modifiers: NSEvent.ModifierFlags, keyCode: UInt16 = 0) -> Bool {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                                     windowNumber: window.windowNumber, context: nil, characters: key,
+                                     charactersIgnoringModifiers: key, isARepeat: false, keyCode: keyCode)!
+        return handleLocal(event) == nil
+    }
+    func debugClickOutside() { clickedOutside(reason: "自测") }
     func debugCopyBoth() { copy(model.sourceText + "\n\n" + model.translation, hint: "已复制原文和译文") }
     var debugCopyHUD: RecognitionHUD? { hud }
     var debugWindow: NSWindow { window }

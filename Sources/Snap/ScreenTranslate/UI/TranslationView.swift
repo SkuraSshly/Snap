@@ -4,7 +4,7 @@ import SwiftUI
 import Translation
 
 /// 结果窗口的内容（温暖磨砂风格，与截图工具栏、设置窗口一致）：
-/// 1. 顶部：原文语言 ⇄ 目标语言，右上角关闭
+/// 1. 顶部：原文语言 ⇄ 目标语言，右上角钉住、关闭
 /// 2. 原文：可直接编辑，编辑后自动重新翻译；下方朗读、复制
 /// 3. 译文：可选择；下方朗读、复制、引擎名
 /// 4. 底部：复制原文和译文
@@ -13,6 +13,7 @@ struct TranslationView: View {
     @ObservedObject private var speaker = Speaker.shared
     let onClose: () -> Void
     let onCopy: (String, String) -> Void   // (要复制的文字, 提示语)
+    let onTogglePin: () -> Void
 
     static let width: CGFloat = 420
     private static let textWidth = width - 2 * 14 - 2 * 12
@@ -29,8 +30,10 @@ struct TranslationView: View {
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: Self.width)
-        .fixedSize(horizontal: false, vertical: true)
+        // 平时宽度固定、高度随内容；钉住后拖过边缘调整了大小，内容就填满窗口（原文、译文平分多出来的高度）
+        .frame(width: model.isFreeSized ? nil : Self.width)
+        .frame(maxWidth: model.isFreeSized ? .infinity : nil, maxHeight: model.isFreeSized ? .infinity : nil, alignment: .top)
+        .fixedSize(horizontal: false, vertical: !model.isFreeSized)
         .fontDesign(.rounded)
         .tint(.apricot)
         .background(WarmWindowBackground())
@@ -68,6 +71,15 @@ struct TranslationView: View {
                 }
             }
             Spacer(minLength: 4)
+            Button(action: onTogglePin) {
+                Image(systemName: model.isPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 11, weight: .bold))
+                    .rotationEffect(.degrees(model.isPinned ? 0 : 45))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(WarmIconButtonStyle(active: model.isPinned))
+            .help(model.isPinned ? "取消钉住（⌘P）" : "钉住：置顶、点别处不关闭，可拖动、调整大小（⌘P）")
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: model.isPinned)
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
@@ -96,8 +108,9 @@ struct TranslationView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(Color.warmInk)
                     .scrollContentBackground(.hidden)
-                    .scrollIndicators(Self.height(of: model.sourceText, max: .infinity) > 180 ? .automatic : .never)
-                    .frame(height: Self.height(of: model.sourceText, max: 180))
+                    .scrollIndicators(model.isFreeSized || Self.height(of: model.sourceText, max: .infinity) > 180 ? .automatic : .never)
+                    .frame(height: model.isFreeSized ? nil : Self.height(of: model.sourceText, max: 180))
+                    .frame(minHeight: model.isFreeSized ? 40 : nil, maxHeight: model.isFreeSized ? .infinity : nil)
                     .padding(.horizontal, -5)   // TextEditor 自带的内边距
             }
             HStack(spacing: 4) {
@@ -153,8 +166,9 @@ struct TranslationView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollIndicators(Self.height(of: model.translation, max: .infinity) > 240 ? .automatic : .never)
-        .frame(height: Self.height(of: model.translation, max: 240))
+        .scrollIndicators(model.isFreeSized || Self.height(of: model.translation, max: .infinity) > 240 ? .automatic : .never)
+        .frame(height: model.isFreeSized ? nil : Self.height(of: model.translation, max: 240))
+        .frame(minHeight: model.isFreeSized ? 40 : nil, maxHeight: model.isFreeSized ? .infinity : nil)
     }
 
     private func message(_ text: String, symbol: String) -> some View {

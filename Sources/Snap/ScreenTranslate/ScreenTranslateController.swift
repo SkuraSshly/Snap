@@ -14,8 +14,12 @@ final class ScreenTranslateController {
     private var hud: RecognitionHUD?   // 预留：识别失败等全局提示
     /// 正在识别的任务（新的截屏翻译开始时取消上一个）
     private var task: Task<Void, Never>?
-    /// 没钉住的结果窗口（同一时间只有一个）
+    /// 没钉住的结果窗口（同一时间只有一个；新的截屏翻译会替换它）
     private var preview: TranslationWindow?
+    /// 钉住的结果窗口（可以有多个，新的截屏翻译不影响它们）
+    private var pinned: [TranslationWindow] = []
+    /// 正在识别的那个窗口（它被关掉时停止识别）
+    private weak var recognizingWindow: TranslationWindow?
 
     private init() {}
 
@@ -115,11 +119,25 @@ final class ScreenTranslateController {
         let model = TranslationModel(recognizing: ())
         let window = TranslationWindow(model: model, near: crop.sourceRect)
         window.onClose = { [weak self, weak window] in
-            guard let self, self.preview === window else { return }
-            self.preview = nil
-            self.task?.cancel()   // 识别中就关了窗口：不用再识别
+            guard let self, let window else { return }
+            if self.preview === window { self.preview = nil }
+            self.pinned.removeAll { $0 === window }
+            if self.recognizingWindow === window { self.task?.cancel() }   // 识别中就关了窗口：不用再识别
         }
-        preview = window
+        window.onPinChange = { [weak self, weak window] isPinned in
+            guard let self, let window else { return }
+            if isPinned {
+                if self.preview === window { self.preview = nil }
+                if !self.pinned.contains(where: { $0 === window }) { self.pinned.append(window) }
+            } else {
+                // 取消钉住：它变回普通窗口；原来那个没钉住的窗口关掉（同一时间只留一个）
+                self.pinned.removeAll { $0 === window }
+                if let old = self.preview, old !== window { old.close(reason: "另一个窗口取消了钉住") }
+                self.preview = window
+            }
+        }
+        if model.isPinned { pinned.append(window) } else { preview = window }
+        recognizingWindow = window
         window.show()
         Log.capture.notice("截屏翻译：结果窗口已出现，耗时 \((ContinuousClock.now - started).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
 
@@ -155,7 +173,13 @@ final class ScreenTranslateController {
     }
 
     #if DEBUG
-    var debugPreview: TranslationWindow? { preview }
+    var debugPreview: TranslationWindow? { preview ?? pinned.last }
+    var debugPinned: [TranslationWindow] { pinned }
+    /// 自测结束：关掉所有结果窗口
+    func debugCloseAll() {
+        preview?.close(reason: "自测")
+        pinned.forEach { $0.close(reason: "自测") }
+    }
     var debugHUD: RecognitionHUD? { hud }
     /// 等识别结束（自测用）
     func debugWait() async { await task?.value }

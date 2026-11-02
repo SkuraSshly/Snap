@@ -33,9 +33,16 @@ struct TranslateSettingsView: View {
                           caption: "二维码的内容附在文字后面", isOn: $prefs.ocrDetectsQRCodes)
             }
 
+            SettingsSection(title: "结果窗口",
+                            footer: "窗口里的快捷键：⌘C 复制译文、⇧⌘C 复制原文、⌘R 重新翻译、⌘P 钉住 / 取消钉住、Esc 关闭。") {
+                SwitchRow(icon: "pin.fill", tint: .apricot, title: "默认钉住",
+                          caption: "钉住的窗口置顶、点别处不会关闭，可以拖动、调整大小，也可以同时钉住多个对照着看。",
+                          isFirst: true, isOn: $prefs.translateWindowPinnedByDefault)
+            }
+
             SettingsSection(title: "即将加入", footer: "截屏翻译的快捷键在「快捷键」里设置。") {
-                SettingsRow(icon: "sparkles", tint: .chipLavender, title: "翻译、结果窗口、历史记录",
-                            caption: "默认目标语言、钉住结果窗口、朗读语速、可选的在线翻译引擎、翻译历史，会在后续版本陆续出现在这里。",
+                SettingsRow(icon: "sparkles", tint: .chipLavender, title: "查词、在线引擎、历史记录",
+                            caption: "默认目标语言、朗读语速、单词查词、可选的在线翻译引擎、翻译历史，会在后续版本陆续出现在这里。",
                             isFirst: true) {
                     EmptyView()
                 }

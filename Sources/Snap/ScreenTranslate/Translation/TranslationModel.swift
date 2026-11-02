@@ -46,6 +46,10 @@ final class TranslationModel: ObservableObject {
     @Published private(set) var isRecognizing = false
     /// 识别失败或没有文字时的提示
     @Published private(set) var recognitionFailure: String?
+    /// 钉住：置顶、点别处不关闭、可以拖动和调整大小
+    @Published var isPinned = false
+    /// 用户拖过窗口边缘调整了大小：之后内容自适应窗口，而不是窗口随内容变高
+    @Published var isFreeSized = false
     /// 识别超过 2 秒（多半是系统第一次编译这种文字的识别模型）
     @Published private(set) var isSlowRecognition = false
     private let detector = LanguageDetector(preferredLanguages: TranslateLanguage.systemPreferred)

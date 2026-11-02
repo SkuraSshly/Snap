@@ -76,7 +76,7 @@ final class Preferences: ObservableObject {
         case recordingCountdown, highlightClicks, recordingShowThumbnail
         case gifFrameRate, gifMaxWidth
         case screenshotHotkey, recordingHotkey, translateHotkey
-        case ocrSmartLayout, ocrDetectsQRCodes, ocrPreferredLanguage
+        case ocrSmartLayout, ocrDetectsQRCodes, ocrPreferredLanguage, translateWindowPinnedByDefault
     }
 
     // MARK: 通用
@@ -121,6 +121,8 @@ final class Preferences: ObservableObject {
     @Published var ocrSmartLayout: Bool { didSet { Self.save(ocrSmartLayout, .ocrSmartLayout) } }
     /// 同时识别二维码（默认关闭）
     @Published var ocrDetectsQRCodes: Bool { didSet { Self.save(ocrDetectsQRCodes, .ocrDetectsQRCodes) } }
+    /// 截屏翻译的结果窗口默认钉住
+    @Published var translateWindowPinnedByDefault: Bool { didSet { Self.save(translateWindowPinnedByDefault, .translateWindowPinnedByDefault) } }
     /// OCR 优先语言（TranslateLanguage 的 rawValue），空字符串表示跟随系统语言
     @Published var ocrPreferredLanguage: String { didSet { Self.save(ocrPreferredLanguage, .ocrPreferredLanguage) } }
 
@@ -167,6 +169,7 @@ final class Preferences: ObservableObject {
         ocrSmartLayout = Self.load(.ocrSmartLayout, true)
         ocrDetectsQRCodes = Self.load(.ocrDetectsQRCodes, false)
         ocrPreferredLanguage = Self.load(.ocrPreferredLanguage, "")
+        translateWindowPinnedByDefault = Self.load(.translateWindowPinnedByDefault, false)
 
         screenshotHotkey = Hotkey(stored: Self.load(.screenshotHotkey, [Int]())) ?? .defaultScreenshot
         recordingHotkey = Hotkey(stored: Self.load(.recordingHotkey, [Int]())) ?? .defaultRecording
