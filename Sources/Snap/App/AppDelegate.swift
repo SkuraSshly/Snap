@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar = StatusBarController()
         PermissionManager.shared.refresh()
         CaptureCoordinator.shared.start()
+        LaunchAtLogin.shared.reregisterIfEnabled()   // 登录项指向正在运行的这一份 App
+        ScreenTranslateController.shared.warmUpAllIfNeeded()   // 一次性：让系统预先编译文字识别模型
         DispatchQueue.global(qos: .utility).async { CapturedImage.removeStaleSharingFiles() }
         Log.capture.notice("Snap 已启动，屏幕录制权限：\(PermissionManager.shared.screenRecordingGranted ? "已授权" : "未授权", privacy: .public)")
 
@@ -23,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugRecordingTest.runIfRequested()
         DebugFeatureTest.runIfRequested()
         DebugShowcase.runIfRequested()
+        DebugShowcase.runSettingsShotsIfRequested()
         #endif
     }
 

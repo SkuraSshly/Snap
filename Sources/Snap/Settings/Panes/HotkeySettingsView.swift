@@ -8,36 +8,38 @@ struct HotkeySettingsView: View {
 
     var body: some View {
         SettingsPane {
-            row(.screenshot, hotkey: prefs.screenshotHotkey, defaultHotkey: .defaultScreenshot)
-            row(.recording, hotkey: prefs.recordingHotkey, defaultHotkey: .defaultRecording)
-            LabeledContent("") {
-                Text("点击快捷键框，然后按下新的组合键；按 Esc 取消。需要包含 ⌘、⌥ 或 ⌃ 之一（F1–F20 可以单独使用）。\n已被 macOS 占用的组合键（如 ⇧⌘3、⌘空格）按下时由系统直接处理，Snap 收不到，不能设置。\n选区界面里再按一次同一个快捷键（按住修饰键连按或松开后再按都行），可在「区域 ↔ 全屏」之间切换；录制中按录屏快捷键停止录制。")
-                    .settingsCaption()
+            SettingsSection(title: "全局快捷键",
+                            footer: "点击快捷键框，然后按下新的组合键；按 Esc 取消。需要包含 ⌘、⌥ 或 ⌃ 之一（F1–F20 可以单独使用）。已被 macOS 占用的组合键（如 ⇧⌘3、⌘空格）按下时由系统直接处理，Snap 收不到，不能设置。") {
+                row(.screenshot, icon: "camera.viewfinder", tint: .chipSky, hotkey: prefs.screenshotHotkey,
+                    defaultHotkey: .defaultScreenshot, isFirst: true)
+                row(.recording, icon: "record.circle", tint: .coral, hotkey: prefs.recordingHotkey,
+                    defaultHotkey: .defaultRecording)
+                row(.translate, icon: "character.bubble", tint: .chipSage, hotkey: prefs.translateHotkey,
+                    defaultHotkey: .defaultTranslate)
+            }
+            SettingsSection(title: "小技巧") {
+                SettingsRow(icon: "arrow.left.arrow.right", tint: .chipLavender, title: "区域 ↔ 全屏",
+                            caption: "选区界面里再按一次同一个快捷键（按住修饰键连按或松开后再按都行）即可切换；截屏翻译的全屏模式按 Enter 识别整屏。",
+                            isFirst: true) {
+                    EmptyView()
+                }
             }
         }
         .onDisappear { model.messages.removeAll() }
     }
 
     @ViewBuilder
-    private func row(_ action: HotkeyManager.Action, hotkey: Hotkey, defaultHotkey: Hotkey) -> some View {
-        LabeledContent("\(action.title)：") {
-            OptionStack {
-                HStack(spacing: 10) {
-                    HotkeyRecorder(action: action, hotkey: hotkey)
-                        .frame(width: 150, height: 26)
-                        // 与左边「截图：」文字的基线对齐（文字在框里垂直居中）
-                        .alignmentGuide(.firstTextBaseline) { $0.height / 2 + 4.5 }
-                    if hotkey != defaultHotkey {
-                        Button("恢复默认") { model.record(defaultHotkey, for: action) }
-                    }
+    private func row(_ action: HotkeyManager.Action, icon: String, tint: Color, hotkey: Hotkey, defaultHotkey: Hotkey,
+                     isFirst: Bool = false) -> some View {
+        SettingsRow(icon: icon, tint: tint, title: action.title, caption: model.messages[action].map { "⚠️ " + $0 } ?? action.usage,
+                    isFirst: isFirst) {
+            HStack(spacing: 8) {
+                if hotkey != defaultHotkey {
+                    Button("恢复默认") { model.record(defaultHotkey, for: action) }
+                        .buttonStyle(WarmButtonStyle())
                 }
-                if let message = model.messages[action] {
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 320, alignment: .leading)
-                }
+                HotkeyRecorder(action: action, hotkey: hotkey)
+                    .frame(width: 150, height: 28)
             }
         }
     }
@@ -68,7 +70,7 @@ final class HotkeySettingsModel: ObservableObject {
 }
 
 /// SwiftUI 包装
-private struct HotkeyRecorder: NSViewRepresentable {
+struct HotkeyRecorder: NSViewRepresentable {
     let action: HotkeyManager.Action
     let hotkey: Hotkey
 
@@ -115,7 +117,7 @@ final class HotkeyRecorderField: NSView {
 
     init(hotkey: Hotkey) {
         self.hotkey = hotkey
-        super.init(frame: CGRect(x: 0, y: 0, width: 150, height: 26))
+        super.init(frame: CGRect(x: 0, y: 0, width: 150, height: 28))
         toolTip = "点击后按下新的快捷键"
     }
 
@@ -124,7 +126,7 @@ final class HotkeyRecorderField: NSView {
     override var acceptsFirstResponder: Bool { true }
     /// 设置窗口不是焦点时，第一下点击也直接进入录制
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override var intrinsicContentSize: NSSize { NSSize(width: 150, height: 26) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 150, height: 28) }
 
     override func mouseDown(with event: NSEvent) {
         if isRecording {
@@ -227,34 +229,71 @@ final class HotkeyRecorderField: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let palette = WarmPalette(for: self)
         let rect = bounds.insetBy(dx: 1, dy: 1)
-        let shape = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-        (isRecording ? NSColor.controlAccentColor.withAlphaComponent(0.12) : NSColor.controlBackgroundColor).setFill()
+        let shape = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        (isRecording ? WarmPalette.apricot.withAlphaComponent(0.14) : palette.hover).setFill()
         shape.fill()
-        shape.lineWidth = isRecording ? 2 : 1
-        (isRecording ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+        shape.lineWidth = isRecording ? 1.5 : 0.5
+        (isRecording ? WarmPalette.apricot : palette.hairline).setStroke()
         shape.stroke()
 
-        let text: String
-        let color: NSColor
         if isRecording {
             let symbols = Hotkey.modifierSymbols(liveModifiers)
-            text = symbols.isEmpty ? "请按下快捷键…" : symbols + " …"
-            color = .secondaryLabelColor
+            if symbols.isEmpty {
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: roundedFont(ofSize: 12, weight: .medium),
+                    .foregroundColor: palette.secondaryInk,
+                ]
+                let text = "请按下快捷键…" as NSString
+                let size = text.size(withAttributes: attributes)
+                text.draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),
+                          withAttributes: attributes)
+            } else {
+                drawKeycaps(symbols.map(String.init) + ["…"], palette: palette, live: true)
+            }
         } else {
-            text = hotkey.spacedDisplayString
-            color = .labelColor
+            drawKeycaps(hotkey.spacedDisplayString.split(separator: " ").map(String.init), palette: palette, live: false)
         }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: color,
-        ]
-        let size = (text as NSString).size(withAttributes: attributes)
-        (text as NSString).draw(at: CGPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),
-                                withAttributes: attributes)
+    }
+
+    /// 每个键画成一个小键帽：圆角方块 + 底部一道厚边，像真的键盘按键
+    private func drawKeycaps(_ keys: [String], palette: WarmPalette, live: Bool) {
+        let font = roundedFont(ofSize: 12, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: palette.ink]
+        let capHeight: CGFloat = 18, gap: CGFloat = 4
+        let widths = keys.map { max(capHeight, ceil(($0 as NSString).size(withAttributes: attributes).width) + 10) }
+        var x = (bounds.width - widths.reduce(0, +) - gap * CGFloat(keys.count - 1)) / 2
+        let y = (bounds.height - capHeight) / 2 + 0.5
+        for (key, width) in zip(keys, widths) {
+            let cap = CGRect(x: x, y: y, width: width, height: capHeight)
+            if key != "…" {
+                // 底部厚边
+                palette.hairline.withAlphaComponent(palette.isDark ? 0.5 : 0.35).setFill()
+                NSBezierPath(roundedRect: cap.offsetBy(dx: 0, dy: -1.5), xRadius: 4.5, yRadius: 4.5).fill()
+                (palette.isDark ? NSColor(srgbRed: 0.42, green: 0.35, blue: 0.30, alpha: 1) : NSColor.white).setFill()
+                NSBezierPath(roundedRect: cap, xRadius: 4.5, yRadius: 4.5).fill()
+            }
+            let size = (key as NSString).size(withAttributes: attributes)
+            (key as NSString).draw(at: CGPoint(x: cap.midX - size.width / 2, y: cap.midY - size.height / 2 + 0.5),
+                                   withAttributes: live && key == "…" ? [.font: font, .foregroundColor: palette.secondaryInk]
+                                                                      : attributes)
+            x += width + gap
+        }
     }
 
     #if DEBUG
     func debugPress(_ event: NSEvent) { keyDown(with: event) }
     #endif
+}
+
+extension HotkeyManager.Action {
+    /// 快捷键设置里的一句话说明
+    var usage: String {
+        switch self {
+        case .screenshot: "冻结屏幕后框选或单击窗口，可以标注"
+        case .recording: "区域或全屏录制；录制中再按一次停止"
+        case .translate: "框选文字或单击窗口，松开即识别并翻译"
+        }
+    }
 }

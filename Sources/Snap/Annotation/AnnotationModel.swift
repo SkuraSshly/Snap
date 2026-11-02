@@ -55,13 +55,79 @@ enum AnnotationPalette {
     ]
 }
 
-/// 当前的颜色和粗细（所有工具共用，像 Snipaste 一样切换工具后保持）
+/// 颜色、粗细和不透明度（每个工具各自记忆，见 ToolStyleMemory）
 struct AnnotationStyle {
     var color: NSColor = AnnotationPalette.colors[0]
     var size: SizeLevel = .medium
+    /// 不透明度 0.1 ~ 1
+    var opacity: CGFloat = 1
+}
 
-    /// 上次用的颜色和粗细：截图界面和重新编辑窗口共用，本次运行期间保留
-    @MainActor static var lastUsed = AnnotationStyle()
+/// 每个工具各自记住上次用的颜色、粗细和不透明度：截图界面和重新编辑窗口共用，
+/// 保存在 Snap 的设置里（UserDefaults），下次启动仍然有效
+@MainActor
+enum ToolStyleMemory {
+    private static let key = "annotationToolStyles"
+    private static var styles: [AnnotationTool: AnnotationStyle]?
+
+    /// 自测时用单独的设置文件，不改用户自己的记忆
+    private static let defaults: UserDefaults = {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if environment["SNAP_UITEST"] != nil || environment["SNAP_SHOWCASE"] != nil,
+           let test = UserDefaults(suiteName: "local.snap.uitest") {
+            test.removeObject(forKey: key)
+            return test
+        }
+        #endif
+        return .standard
+    }()
+
+    static func style(for tool: AnnotationTool) -> AnnotationStyle {
+        loaded()[tool] ?? AnnotationStyle()
+    }
+
+    static func remember(_ style: AnnotationStyle, for tool: AnnotationTool) {
+        var all = loaded()
+        all[tool] = style
+        styles = all
+        defaults.set(all.reduce(into: [String: [String: Any]]()) { result, entry in
+            result[entry.key.rawValue] = ["color": ColorCode.hex(entry.value.color), "size": entry.value.size.rawValue,
+                                          "opacity": Double(entry.value.opacity)]
+        }, forKey: key)
+    }
+
+    private static func loaded() -> [AnnotationTool: AnnotationStyle] {
+        if let styles { return styles }
+        var result: [AnnotationTool: AnnotationStyle] = [:]
+        for (name, value) in defaults.dictionary(forKey: key) ?? [:] {
+            guard let tool = AnnotationTool(rawValue: name), let entry = value as? [String: Any] else { continue }
+            var style = AnnotationStyle()
+            if let hex = entry["color"] as? String, let parsed = ColorCode.parse(hex) {
+                // 预设颜色用原来的颜色对象（工具栏按它标选中）
+                style.color = AnnotationPalette.colors.first { $0.isSameColor(as: parsed.color) } ?? parsed.color
+            }
+            if let size = (entry["size"] as? Int).flatMap(SizeLevel.init(rawValue:)) { style.size = size }
+            if let opacity = entry["opacity"] as? Double { style.opacity = min(max(CGFloat(opacity), 0.1), 1) }
+            result[tool] = style
+        }
+        styles = result
+        return result
+    }
+
+    #if DEBUG
+    /// 自测用：所有工具设成同一个样式
+    static func debugSetAll(_ style: AnnotationStyle) {
+        for tool in AnnotationTool.allCases { remember(style, for: tool) }
+    }
+    /// 自测用：丢掉内存里的记忆，从设置文件重新读取（模拟重新启动）
+    static func debugReload() { styles = nil }
+    /// 自测结束：删掉测试用的设置
+    static func debugCleanUp() {
+        styles = nil
+        if defaults !== UserDefaults.standard { defaults.removePersistentDomain(forName: "local.snap.uitest") }
+    }
+    #endif
 }
 
 /// 一个标注。坐标是画布坐标（单位：点，原点在左下角，与 AppKit 一致）：
@@ -85,6 +151,41 @@ struct Annotation: Identifiable {
     var shape: Shape
     var color: NSColor
     var size: SizeLevel
+    /// 不透明度 0.1 ~ 1（整个标注一起变淡）。马赛克 / 模糊永远不透明：变淡会露出被遮住的内容
+    var opacity: CGFloat = 1
+
+    init(shape: Shape, color: NSColor, size: SizeLevel, opacity: CGFloat = 1) {
+        self.shape = shape
+        self.color = color
+        self.size = size
+        self.opacity = Self.allowsOpacity(shape) ? opacity : 1
+    }
+
+    /// 能不能调不透明度（马赛克、模糊不能）
+    var allowsOpacity: Bool { Self.allowsOpacity(shape) }
+
+    private static func allowsOpacity(_ shape: Shape) -> Bool {
+        switch shape {
+        case .mosaic, .blur: false
+        default: true
+        }
+    }
+
+    /// 画出这种标注的工具（选中标注时，属性栏按它显示颜色 / 粗细）
+    var tool: AnnotationTool {
+        switch shape {
+        case .rectangle: .rectangle
+        case .ellipse: .ellipse
+        case .arrow: .arrow
+        case .line: .line
+        case .pen: .pen
+        case .highlighter: .highlighter
+        case .text: .text
+        case .counter: .counter
+        case .mosaic: .mosaic
+        case .blur: .blur
+        }
+    }
 
     // MARK: - 各工具的尺寸（单位：点）
 
@@ -119,18 +220,42 @@ final class AnnotationDocument {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 
-    /// 下一个序号：按现有序号数量递增，撤销后自动回退
+    /// 下一个序号：现有最大序号 + 1（删掉中间某个序号不会出现重复；撤销后自动回退）
     var nextCounterNumber: Int {
-        annotations.reduce(0) { count, annotation in
-            if case .counter = annotation.shape { return count + 1 }
-            return count
+        annotations.reduce(0) { maximum, annotation in
+            if case .counter(let number, _) = annotation.shape { return max(maximum, number) }
+            return maximum
         } + 1
     }
 
     func add(_ annotation: Annotation) {
+        recordUndo()
+        annotations.append(annotation)
+    }
+
+    /// 记一个撤销点（之后的修改可以一次撤销回来）
+    func recordUndo() {
         undoStack.append(annotations)
         redoStack.removeAll()
-        annotations.append(annotation)
+    }
+
+    func annotation(withID id: UUID) -> Annotation? {
+        annotations.first { $0.id == id }
+    }
+
+    /// 替换同一个标注（移动时用）；需要的话先调用 recordUndo 记撤销点
+    func replace(_ annotation: Annotation) {
+        guard let index = annotations.firstIndex(where: { $0.id == annotation.id }) else { return }
+        annotations[index] = annotation
+    }
+
+    /// 删除一个标注（可撤销）
+    @discardableResult
+    func remove(id: UUID) -> Bool {
+        guard let index = annotations.firstIndex(where: { $0.id == id }) else { return false }
+        recordUndo()
+        annotations.remove(at: index)
+        return true
     }
 
     @discardableResult

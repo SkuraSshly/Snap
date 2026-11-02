@@ -6,16 +6,26 @@ import ScreenCaptureKit
 ///
 /// 流程：
 /// 1. 冻屏：记下窗口位置，并以原生分辨率截下所有屏幕（鼠标所在的那块优先），每块屏幕盖一个遮罩窗口显示冻结画面
-/// 2. 遮罩出现并成为焦点窗口后，暂停全局快捷键，之后的 ⌥1 由遮罩窗口自己处理，避免重复触发
+/// 2. 遮罩出现并成为焦点窗口后，暂停全局快捷键，之后的 ⌥A 由遮罩窗口自己处理，避免重复触发
 /// 3. 冻屏完成后再把 Snap 切到前台：macOS 只允许前台 App 改变鼠标指针（十字准星），
 ///    此时底图已经截好，当前 App 失去焦点（比如关掉弹出菜单）不会影响截图内容
 /// 4. 区域模式：悬停识别窗口、拖拽 / 单击选取、控制点调整、方向键微调（见 RegionSelector），旁边有放大镜
-/// 5. ⌥1（真正的按下，忽略按住不放的重复）在「区域 ↔ 全屏」之间切换，次数不限，选区保留
+/// 5. ⌥A（真正的按下，忽略按住不放的重复）在「区域 ↔ 全屏」之间切换，次数不限，选区保留
 /// 6. Enter 从冻结的底图裁剪出结果；Esc 随时取消；结束后把焦点还给原来的 App
+///
+/// 截屏翻译（⌥D）也用这一套界面，区别是：没有标注工具栏和放大镜；松开鼠标（拖出选区或单击窗口）立即识别，
+/// 全屏模式按 Enter 识别整块屏幕；结果交给 onTranslate。
 @MainActor
 final class ScreenshotSession: OverlayEventHandler {
-    var onFinish: (() -> Void)?
+    enum Purpose { case screenshot, translate }
 
+    var onFinish: (() -> Void)?
+    /// 截屏翻译：选好区域后回调（这时界面已经关闭）
+    var onTranslate: ((FrozenDisplay.Crop) -> Void)?
+
+    let purpose: Purpose
+    private var isTranslating: Bool { purpose == .translate }
+    private var hotkeyAction: HotkeyManager.Action { isTranslating ? .translate : .screenshot }
     private let hotkey: Hotkey
     private(set) var mode: CaptureMode = .region
 
@@ -46,11 +56,19 @@ final class ScreenshotSession: OverlayEventHandler {
     private var previousApp: NSRunningApplication?
     private var isWatchingDeactivation = false
 
-    init(hotkey: Hotkey) {
+    init(hotkey: Hotkey, purpose: Purpose = .screenshot) {
         self.hotkey = hotkey
+        self.purpose = purpose
         toolbar.onSelectTool = { [weak self] tool in self?.selectTool(tool) }
         toolbar.onSelectColor = { [weak self] color in self?.updateStyle { $0.color = color } }
         toolbar.onSelectSize = { [weak self] size in self?.updateStyle { $0.size = size } }
+        toolbar.onSelectOpacity = { [weak self] opacity in self?.updateStyle { $0.opacity = opacity } }
+        toolbar.onPickColor = { [weak self] color, opacity in
+            self?.updateStyle {
+                $0.color = color
+                if let opacity { $0.opacity = min(max(opacity, 0.1), 1) }
+            }
+        }
         toolbar.onAction = { [weak self] action in self?.perform(action) }
     }
 
@@ -84,7 +102,7 @@ final class ScreenshotSession: OverlayEventHandler {
         #endif
 
         // 窗口位置和屏幕画面在同一时刻取得，悬停识别的窗口与冻结画面对得上
-        selector.windows = WindowList.snapshot(includingOwn: PinManager.shared.windowNumbers)
+        selector.windows = WindowList.snapshot(includingOwn: ScreenFreezer.capturableOwnWindows)
         do {
             let content = try await ScreenFreezer.shareableContent()
             guard !isFinished else { return }
@@ -126,7 +144,8 @@ final class ScreenshotSession: OverlayEventHandler {
 
         let window = OverlayWindow(screen: frozen.screen)
         let view = OverlayView(frame: NSRect(origin: .zero, size: frozen.screen.frame.size),
-                               image: frozen.image, scale: frozen.scale, accent: OverlayAccent.screenshot)
+                               image: frozen.image, scale: frozen.scale,
+                               accent: isTranslating ? OverlayAccent.translate : OverlayAccent.screenshot)
         view.handler = self
         window.handler = self
         window.contentView = view
@@ -135,8 +154,8 @@ final class ScreenshotSession: OverlayEventHandler {
 
         if isPrimary {
             window.makeKeyAndOrderFront(nil)
-            // 遮罩已是焦点窗口，后面的 ⌥1 交给它自己处理
-            HotkeyManager.shared.suspend(.screenshot)
+            // 遮罩已是焦点窗口，后面的 ⌥A（截屏翻译是 ⌥D）交给它自己处理
+            HotkeyManager.shared.suspend(hotkeyAction)
             let elapsed = ContinuousClock.now - startTime
             Log.capture.notice("截图界面已出现，耗时 \(elapsed.formatted(.units(allowed: [.milliseconds])), privacy: .public)，\(frozen.image.width)×\(frozen.image.height) 像素")
             activateForCursor()
@@ -153,7 +172,7 @@ final class ScreenshotSession: OverlayEventHandler {
 
     private func cancel() {
         guard !isFinished else { return }
-        Log.capture.notice("截图已取消")
+        Log.capture.notice("\(self.isTranslating ? "截屏翻译" : "截图", privacy: .public)已取消")
         finish()
     }
 
@@ -176,7 +195,7 @@ final class ScreenshotSession: OverlayEventHandler {
         overlays.removeAll()
         displays.removeAll()   // 释放底图（每块屏幕十几到二十几 MB）
         NSCursor.arrow.set()
-        HotkeyManager.shared.resume(.screenshot)
+        HotkeyManager.shared.resume(hotkeyAction)
         restorePreviousApp()
         onFinish?()
     }
@@ -273,6 +292,11 @@ final class ScreenshotSession: OverlayEventHandler {
     private func complete(save: Bool = false) {
         guard let result = makeResult() else { return }
         finish()
+        if isTranslating {
+            Log.capture.notice("截屏翻译：识别 \(result.image.width)×\(result.image.height) 像素")
+            onTranslate?(result)
+            return
+        }
         Log.capture.notice("截图完成：\(result.image.width)×\(result.image.height) 像素")
         ScreenshotOutput.deliver(result.image, scale: result.scale, sourceRect: result.sourceRect, forceSave: save)
     }
@@ -333,10 +357,11 @@ final class ScreenshotSession: OverlayEventHandler {
     }
 
     private func updateStyle(_ change: (inout AnnotationStyle) -> Void) {
-        var style = annotator?.style ?? AnnotationStyle.lastUsed
+        // 从属性栏当前显示的样式改起（选中标注时显示的是它的样式）
+        guard let annotator = prepareAnnotator() else { return }
+        var style = annotator.displayedStyle
         change(&style)
-        AnnotationStyle.lastUsed = style
-        annotator?.style = style
+        annotator.applyStyle(style)
         refresh()
     }
 
@@ -358,7 +383,6 @@ final class ScreenshotSession: OverlayEventHandler {
         let controller = AnnotationController(base: BaseImage(image: frozen.image, scale: frozen.scale,
                                                               canvasHeight: frozen.screen.frame.height))
         controller.hostView = view
-        controller.style = AnnotationStyle.lastUsed
         controller.tool = previousTool
         controller.onChange = { [weak self] in self?.updateToolbar() }
         view.installAnnotationLayer(controller.layer)
@@ -375,6 +399,11 @@ final class ScreenshotSession: OverlayEventHandler {
 
     /// 工具栏位置：区域模式在选区下方右对齐（放不下就放上方，再不行放选区内）；全屏模式在屏幕底部中央
     private func updateToolbar() {
+        // 截屏翻译没有标注工具栏
+        if isTranslating {
+            toolbar.removeFromSuperview()
+            return
+        }
         guard let id = annotationTargetDisplayID, let frozen = displays[id],
               let view = overlays[id]?.contentView,
               mode == .fullscreen || (selector.selection != nil && !selector.isInteracting) else {
@@ -382,8 +411,9 @@ final class ScreenshotSession: OverlayEventHandler {
             return
         }
         let annotator = prepareAnnotator()
-        toolbar.update(tool: annotator?.tool, style: annotator?.style ?? AnnotationStyle.lastUsed,
-                       canUndo: annotator?.document.canUndo ?? false, canRedo: annotator?.document.canRedo ?? false)
+        toolbar.update(tool: annotator?.tool, style: annotator?.displayedStyle ?? AnnotationStyle(),
+                       canUndo: annotator?.document.canUndo ?? false, canRedo: annotator?.document.canRedo ?? false,
+                       selectionTool: annotator?.selectedAnnotation?.tool)
         if toolbar.superview !== view {
             toolbar.removeFromSuperview()
             view.addSubview(toolbar)
@@ -432,7 +462,7 @@ final class ScreenshotSession: OverlayEventHandler {
 
     /// 放大镜只在需要对准像素时出现：还没有选区（悬停 / 准备拖拽），或正在拖出选区、拖动控制点；标注时不显示
     private var isMagnifierVisible: Bool {
-        mode == .region && displays[activeDisplayID] != nil && annotator?.tool == nil
+        !isTranslating && mode == .region && displays[activeDisplayID] != nil && annotator?.tool == nil
             && (selector.selection == nil || selector.isSizing)
     }
 
@@ -482,11 +512,15 @@ final class ScreenshotSession: OverlayEventHandler {
         guard let window = overlays[activeDisplayID], let view = window.contentView,
               let frozen = displays[activeDisplayID] else { return }
         let key = hotkey.displayString
-        switch mode {
-        case .region:
+        switch (mode, isTranslating) {
+        case (.region, false):
             hint.setContent(title: "区域截图", items: ["\(key) 切换全屏", "Enter 完成", "Esc 取消"])
-        case .fullscreen:
+        case (.fullscreen, false):
             hint.setContent(title: "全屏截图", items: ["\(key) 切换区域", "Enter 完成", "Esc 取消"])
+        case (.region, true):
+            hint.setContent(title: "截屏翻译", items: ["框选文字或单击窗口", "\(key) 切换全屏", "Esc 取消"])
+        case (.fullscreen, true):
+            hint.setContent(title: "全屏翻译", items: ["Enter 识别整屏", "\(key) 切换区域", "Esc 取消"])
         }
         // 提示条避开选区、放大镜和鼠标
         let origin = frozen.screen.frame.origin
@@ -529,13 +563,21 @@ final class ScreenshotSession: OverlayEventHandler {
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         switch Int(event.keyCode) {
         case kVK_Escape:
-            // 正在输入文字时 Esc 只结束输入（保留文字），再按一次才退出截图
-            if annotator?.isEditingText == true {
+            // 调色盘开着时 Esc 先关调色盘；正在输入文字时只结束输入（保留文字）；选中了标注时先取消选中；再按一次才退出截图
+            if toolbar.closeColorPicker() {
+                refresh()
+            } else if annotator?.isEditingText == true {
                 annotator?.endTextEditing()
+                refresh()
+            } else if annotator?.deselect() == true {
                 refresh()
             } else {
                 cancel()
             }
+        case kVK_Delete, kVK_ForwardDelete:
+            // 删除选中的标注（⌘Z 可以恢复）
+            guard annotator?.deleteSelection() == true else { return false }
+            refresh()
         case kVK_Return, kVK_ANSI_KeypadEnter:
             complete()
         case kVK_ANSI_S where modifiers == .command:
@@ -549,6 +591,18 @@ final class ScreenshotSession: OverlayEventHandler {
             refresh()
         case kVK_ANSI_C where modifiers.isEmpty:
             copyColor()
+        case let key where arrowKeys.contains(key) && annotator?.hasSelection == true:
+            // 选中了标注：方向键移动标注 1 点，Shift + 方向键 10 点
+            guard modifiers.subtracting(.shift).isEmpty else { return false }
+            let step: CGFloat = modifiers.contains(.shift) ? 10 : 1
+            let (dx, dy): (CGFloat, CGFloat) = switch key {
+            case kVK_LeftArrow: (-step, 0)
+            case kVK_RightArrow: (step, 0)
+            case kVK_UpArrow: (0, step)
+            default: (0, -step)
+            }
+            annotator?.moveSelection(dx: dx, dy: dy)
+            refresh()
         case let key where arrowKeys.contains(key) && mode == .region:
             // 方向键微调 1 像素，Shift + 方向键 10 像素（只在截图界面内有效，不是全局快捷键）
             guard modifiers.subtracting(.shift).isEmpty else { return false }
@@ -566,7 +620,7 @@ final class ScreenshotSession: OverlayEventHandler {
         return true
     }
 
-    /// 输入文字时，⌥1 和 ⌘S 也要由截图界面处理（否则 ⌥1 会在输入框里打出 ¡）
+    /// 输入文字时，⌥A 和 ⌘S 也要由截图界面处理（否则 ⌥A 会在输入框里打出 å）
     func overlayShouldIntercept(_ event: NSEvent) -> Bool {
         guard annotator?.isEditingText == true else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
@@ -593,6 +647,13 @@ final class ScreenshotSession: OverlayEventHandler {
            toolbar.frame.contains(view.convert(window.convertPoint(fromScreen: point), from: nil)) {
             return .arrow
         }
+        // 调色盘开着时是箭头（点调色盘外面只是关掉它）
+        if toolbar.isShowingColorPicker { return .arrow }
+        // 鼠标正好在已有的标注上、在选中标注的虚线框内（或正在拖动标注）：系统标准指针，表示可以选中、拖动
+        if let annotator, let p = canvasPoint(point),
+           annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: p) != nil {
+            return .arrow
+        }
         // 选了标注工具：可画的范围内是十字（文字工具是 I 形），范围外是箭头
         if let annotator, let tool = annotator.tool {
             guard let p = canvasPoint(point), annotator.canvasBounds.contains(p) else { return .arrow }
@@ -613,12 +674,15 @@ final class ScreenshotSession: OverlayEventHandler {
     func overlayMouseDown(at point: NSPoint) {
         track(point)
         mouseOwner = .none
+        // 点中已有的标注（任何时候都可以选中、拖动），或选着工具在画新的标注
+        if let annotator, let p = canvasPoint(point),
+           annotator.mouseDown(at: p, shift: NSEvent.modifierFlags.contains(.shift)) {
+            mouseOwner = .annotator
+            refresh()
+            return
+        }
+        // 标注模式下点在可画范围外不做任何事（不会误触重新框选）
         if isAnnotating {
-            // 标注模式下点在可画范围外不做任何事（不会误触重新框选）
-            if let annotator, let p = canvasPoint(point),
-               annotator.mouseDown(at: p, shift: NSEvent.modifierFlags.contains(.shift)) {
-                mouseOwner = .annotator
-            }
             refresh()
             return
         }
@@ -652,6 +716,12 @@ final class ScreenshotSession: OverlayEventHandler {
             }
         case .selector:
             selector.mouseUp(at: point)
+            // 截屏翻译：松开鼠标立即识别（拖出的选区，或单击选中的窗口）
+            if isTranslating, selector.target != nil {
+                mouseOwner = .none
+                complete()
+                return
+            }
         case .none:
             break
         }
@@ -703,7 +773,11 @@ final class ScreenshotSession: OverlayEventHandler {
     var debugToolbar: AnnotationToolbar { toolbar }
     func debugSelectTool(_ tool: AnnotationTool?) { selectTool(tool) }
     func debugPerform(_ action: AnnotationToolbar.Action) { perform(action) }
-    func debugSetStyle(_ style: AnnotationStyle) { updateStyle { $0 = style } }
+    /// 自测用：所有工具都设成这个样式
+    func debugSetStyle(_ style: AnnotationStyle) {
+        ToolStyleMemory.debugSetAll(style)
+        updateStyle { $0 = style }
+    }
     #endif
 }
 

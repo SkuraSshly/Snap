@@ -36,6 +36,21 @@ final class LaunchAtLogin: ObservableObject {
         refresh()
     }
 
+    /// 登录项按 bundle id 记录，系统记下的是「最近登记的那一份 App」的位置。
+    /// 正式版启动时，如果登录项是开着的，就用当前这份重新登记一次，保证登录时启动的是正在用的这一份
+    /// （例如 App 被移动、更新，或者开发时运行过别的副本）。调试版不做，避免把登录项指到编译目录。
+    func reregisterIfEnabled() {
+        #if !DEBUG
+        guard SMAppService.mainApp.status == .enabled else { return }
+        do {
+            try SMAppService.mainApp.register()
+        } catch {
+            Log.capture.error("重新登记登录项失败：\(error.localizedDescription, privacy: .public)")
+        }
+        refresh()
+        #endif
+    }
+
     func openSystemSettings() {
         SMAppService.openSystemSettingsLoginItems()
     }

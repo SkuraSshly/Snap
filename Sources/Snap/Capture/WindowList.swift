@@ -16,7 +16,7 @@ enum WindowList {
             guard let layer = info[kCGWindowLayer as String] as? Int,
                   (0..<maxLayer).contains(layer),                                   // 普通窗口、浮动面板、菜单栏、程序坞等
                   (info[kCGWindowOwnerPID as String] as? pid_t) != ownPID           // 不识别 Snap 自己的界面，
-                    || includingOwn.contains(info[kCGWindowNumber as String] as? CGWindowID ?? 0),  // 钉图除外
+                    || includingOwn.contains(info[kCGWindowNumber as String] as? CGWindowID ?? 0),  // 设置、钉图等普通窗口除外
                   (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,          // 跳过完全透明的辅助窗口
                   let boundsInfo = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsInfo),

@@ -32,7 +32,7 @@ final class OverlayWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    /// 少数按键（⌥1、⌘S）在任何情况下都由截图界面处理，即使焦点在文字输入框里
+    /// 少数按键（⌥A、⌘S）在任何情况下都由截图界面处理，即使焦点在文字输入框里
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown, let handler, handler.overlayShouldIntercept(event) {
             _ = handler.overlayKeyDown(event)

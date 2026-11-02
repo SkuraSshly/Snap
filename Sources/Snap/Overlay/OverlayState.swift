@@ -39,7 +39,7 @@ protocol OverlayEventHandler: AnyObject {
     func overlayRightMouseDown(at point: NSPoint)
     /// 返回 true 表示已处理
     func overlayKeyDown(_ event: NSEvent) -> Bool
-    /// 是否要抢在文字输入框之前处理这个按键（⌥1 切换模式、⌘S 保存，输入文字时也要生效）
+    /// 是否要抢在文字输入框之前处理这个按键（⌥A 切换模式、⌘S 保存，输入文字时也要生效）
     func overlayShouldIntercept(_ event: NSEvent) -> Bool
     func overlayDidResignKey()
     /// 该位置应显示的鼠标指针（控制点上是调整大小箭头，选区内是手形等）
@@ -50,4 +50,6 @@ protocol OverlayEventHandler: AnyObject {
 enum OverlayAccent {
     static let screenshot = NSColor(srgbRed: 0.04, green: 0.52, blue: 1.0, alpha: 1)
     static let recording = NSColor(srgbRed: 1.0, green: 0.23, blue: 0.19, alpha: 1)
+    /// 截屏翻译：薄荷绿，一眼和截图（蓝）、录屏（红）区分开
+    static let translate = NSColor(srgbRed: 0.13, green: 0.70, blue: 0.56, alpha: 1)
 }

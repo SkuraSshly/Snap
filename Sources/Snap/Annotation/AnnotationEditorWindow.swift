@@ -48,6 +48,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         super.init()
 
         window.title = "编辑截图"
+        window.identifier = ScreenFreezer.capturableIdentifier
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.editor = self
@@ -61,7 +62,6 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         canvas.editor = self
         annotator.hostView = canvas
         annotator.canvasBounds = CGRect(origin: .zero, size: imageSize)
-        annotator.style = AnnotationStyle.lastUsed
         annotator.tool = .rectangle   // 打开编辑窗口就是为了标注：默认选中矩形
         annotator.onChange = { [weak self] in self?.updateToolbar() }
         canvas.installAnnotationLayer(annotator.layer)
@@ -69,11 +69,18 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         toolbar.onSelectTool = { [weak self] tool in self?.annotator.tool = tool }
         toolbar.onSelectColor = { [weak self] color in self?.updateStyle { $0.color = color } }
         toolbar.onSelectSize = { [weak self] size in self?.updateStyle { $0.size = size } }
+        toolbar.onSelectOpacity = { [weak self] opacity in self?.updateStyle { $0.opacity = opacity } }
+        toolbar.onPickColor = { [weak self] color, opacity in
+            self?.updateStyle {
+                $0.color = color
+                if let opacity { $0.opacity = min(max(opacity, 0.1), 1) }
+            }
+        }
         toolbar.onAction = { [weak self] action in self?.perform(action) }
         updateToolbar()
 
         window.setFrame(window.frameRect(forContentRect: CGRect(origin: .zero, size: contentSize)), display: false)
-        window.center()
+        window.centerOnScreen()
     }
 
     private func present() {
@@ -84,15 +91,16 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
     }
 
     private func updateStyle(_ change: (inout AnnotationStyle) -> Void) {
-        var style = annotator.style
+        // 从属性栏当前显示的样式改起（选中标注时显示的是它的样式）
+        var style = annotator.displayedStyle
         change(&style)
-        AnnotationStyle.lastUsed = style
-        annotator.style = style
+        annotator.applyStyle(style)
     }
 
     private func updateToolbar() {
-        toolbar.update(tool: annotator.tool, style: annotator.style,
-                       canUndo: annotator.document.canUndo, canRedo: annotator.document.canRedo)
+        toolbar.update(tool: annotator.tool, style: annotator.displayedStyle,
+                       canUndo: annotator.document.canUndo, canRedo: annotator.document.canRedo,
+                       selectionTool: annotator.selectedAnnotation?.tool)
         guard let content = window.contentView else { return }
         let size = toolbar.frame.size
         // 主栏固定在画布下方居中；属性栏出现时向下展开
@@ -134,11 +142,29 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
     // MARK: - 键盘
 
     func handleKey(_ event: NSEvent) -> Bool {
-        if event.isARepeat { return true }
+        // 方向键允许按住连续移动，其他键忽略自动重复
+        let isArrow = [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow].contains(Int(event.keyCode))
+        if event.isARepeat && !isArrow { return true }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         switch Int(event.keyCode) {
         case kVK_Escape:
-            if annotator.isEditingText { annotator.endTextEditing() } else { window.close() }
+            if toolbar.closeColorPicker() {
+                break
+            } else if annotator.isEditingText {
+                annotator.endTextEditing()
+            } else if !annotator.deselect() {
+                window.close()
+            }
+        case kVK_Delete, kVK_ForwardDelete:
+            return annotator.deleteSelection()
+        case _ where isArrow && annotator.hasSelection:
+            let step: CGFloat = modifiers.contains(.shift) ? 10 : 1
+            switch Int(event.keyCode) {
+            case kVK_LeftArrow: annotator.moveSelection(dx: -step, dy: 0)
+            case kVK_RightArrow: annotator.moveSelection(dx: step, dy: 0)
+            case kVK_UpArrow: annotator.moveSelection(dx: 0, dy: step)
+            default: annotator.moveSelection(dx: 0, dy: -step)
+            }
         case kVK_Return, kVK_ANSI_KeypadEnter:
             finish(save: false)
         case kVK_ANSI_S where modifiers == .command:
@@ -181,6 +207,13 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         case .text: .iBeam
         default: .crosshair
         }
+    }
+
+    /// 鼠标所在位置的光标：正好在已有标注上（或正在拖动）时是系统标准指针
+    func canvasCursor(at point: CGPoint) -> NSCursor {
+        if toolbar.isShowingColorPicker { return .arrow }
+        if annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: point) != nil { return .arrow }
+        return canvasCursor
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -246,11 +279,28 @@ final class EditorCanvasView: NSView {
         if let editor { addCursorRect(bounds, cursor: editor.canvasCursor) }
     }
 
+    /// 跟踪鼠标移动，悬停在标注上时换成标准指针
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        editor?.canvasCursor(at: point(event)).set()
+    }
+
     private func point(_ event: NSEvent) -> CGPoint {
         convert(event.locationInWindow, from: nil)   // 已经换算成原图坐标（bounds）
     }
 
     override func mouseDown(with event: NSEvent) { editor?.canvasMouseDown(at: point(event)) }
-    override func mouseDragged(with event: NSEvent) { editor?.canvasMouseDragged(to: point(event)) }
-    override func mouseUp(with event: NSEvent) { editor?.canvasMouseUp(at: point(event)) }
+    override func mouseDragged(with event: NSEvent) {
+        editor?.canvasMouseDragged(to: point(event))
+        editor?.canvasCursor(at: point(event)).set()
+    }
+    override func mouseUp(with event: NSEvent) {
+        editor?.canvasMouseUp(at: point(event))
+        editor?.canvasCursor(at: point(event)).set()
+    }
 }

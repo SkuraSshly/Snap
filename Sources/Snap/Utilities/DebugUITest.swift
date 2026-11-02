@@ -2,6 +2,7 @@
 import AppKit
 import Carbon.HIToolbox
 import ScreenCaptureKit
+import SnapOCRKit
 
 /// 截图界面自动化自测（只编进 debug 版本）。
 /// 用合成图代替真实屏幕（不读取用户屏幕内容），再用模拟的鼠标、键盘事件走一遍所有交互，自动核对结果。
@@ -17,6 +18,9 @@ enum DebugUITest {
     private static let windowB = CGRect(x: 500, y: 300, width: 500, height: 300)
     private static let colorB = SRGBColor(red: 0xCC, green: 0x66, blue: 0x33)
     private static var screenOrigin = CGPoint.zero
+    /// 截屏翻译自测：在窗口 A 露出来的部分写两行字（其余自测用不到文字）
+    private static var drawsText = false
+    private static let textRect = CGRect(x: 220, y: 440, width: 260, height: 120)
 
     struct Synthetic {
         let frozen: FrozenDisplay
@@ -39,6 +43,15 @@ enum DebugUITest {
         ctx.fill(windowA)
         ctx.setFillColor(colorB.cgColor)
         ctx.fill(windowB)
+        if drawsText {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 22, weight: .medium),
+                                                             .foregroundColor: NSColor.white]
+            ("Snap translate test" as NSString).draw(at: CGPoint(x: textRect.minX + 10, y: textRect.minY + 70), withAttributes: attributes)
+            ("截屏翻译自测" as NSString).draw(at: CGPoint(x: textRect.minX + 10, y: textRect.minY + 25), withAttributes: attributes)
+            NSGraphicsContext.restoreGraphicsState()
+        }
         ctx.scaleBy(x: 1 / scale, y: 1 / scale)
         for y in 0..<64 { for x in 0..<64 {
             ctx.setFillColor(CGColor(gray: (x + y) % 2 == 0 ? 0 : 1, alpha: 1))
@@ -300,7 +313,294 @@ enum DebugUITest {
         }
 
         checkEncoder(check: check)
+        await runTranslateChecks(dir: dir, check: check)
+        ToolStyleMemory.debugCleanUp()
         report(check.lines, to: dir)
+    }
+
+    /// 截屏翻译（⌥D）：快捷键、选区界面、松开即识别、单击窗口、全屏 + Enter、取消、识别不到文字
+    private static func runTranslateChecks(dir: URL, check: Checks) async {
+        drawsText = true
+        // 自测机器上没有下载 Apple 翻译的语言包，也不能弹出下载提示：用假的翻译，检查结果窗口的其余部分
+        TranslationModel.debugTranslator = { text, source, target in "[\(source.rawValue)→\(target.rawValue)] \(text)" }
+        let testPasteboard = NSPasteboard(name: NSPasteboard.Name("local.snap.uitest.translate"))
+        TranslationWindow.pasteboard = testPasteboard
+        defer {
+            TranslationModel.debugTranslator = nil
+            TranslationWindow.pasteboard = .general
+            testPasteboard.releaseGlobally()
+        }
+        defer { drawsText = false }
+        let coordinator = CaptureCoordinator.shared
+        let controller = ScreenTranslateController.shared
+        let o = screenOrigin
+        func g(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: o.x + x, y: o.y + y) }
+        func key(_ code: Int, _ modifiers: NSEvent.ModifierFlags = [], _ chars: String = "") -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0,
+                             context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false,
+                             keyCode: UInt16(code))!
+        }
+        /// 按 ⌥D 开始一次截屏翻译
+        func begin() async -> ScreenshotSession? {
+            controller.debugPreview?.close()
+            controller.debugHUD?.close()
+            coordinator.handleHotkey(.translate)
+            try? await Task.sleep(for: .milliseconds(600))
+            return coordinator.debugSession
+        }
+
+        // 快捷键
+        check("截屏翻译默认快捷键 ⌥D", coordinator.hotkey(for: .translate) == .defaultTranslate
+              && Hotkey.defaultTranslate.displayString == "⌥D")
+        check("⌥D 已注册为全局快捷键", HotkeyManager.shared.hotkey(for: .translate) == .defaultTranslate
+              && !HotkeyManager.shared.failedActions.contains(.translate))
+        let clash1 = HotkeyConflicts.problem(with: .defaultScreenshot, for: .translate) ?? ""
+        let clash2 = HotkeyConflicts.problem(with: .defaultTranslate, for: .recording) ?? ""
+        check("冲突检测：⌥A、⌥S、⌥D 互相不能重复", clash1.contains("截图") && clash2.contains("截屏翻译"), "\(clash1) / \(clash2)")
+
+        // 选区界面
+        guard let session = await begin(), session.purpose == .translate else { return check("⌥D 打开截屏翻译界面", false) }
+        check("⌥D 打开截屏翻译界面（冻屏）", session.debugActiveOverlay != nil)
+        check("截屏翻译没有标注工具栏", session.debugToolbar.superview == nil)
+        session.overlayMouseMoved(to: g(300, 250))
+        check("截屏翻译不显示放大镜", !session.debugMagnifierVisible)
+        check("悬停高亮窗口", session.debugSelector.hoveredWindow == CGRect(origin: g(200, 200), size: CGSize(width: 600, height: 400)))
+        check("截屏翻译期间 ⌥A 不打断", { coordinator.handleHotkey(.screenshot); return coordinator.debugSession === session }())
+        DebugSnapshots.renderOverlay(session.debugActiveOverlay, to: dir.appendingPathComponent("11-截屏翻译选区.png"))
+        _ = session.overlayKeyDown(key(kVK_ANSI_D, .option, "∂"))
+        check("⌥D 切换到全屏识别", session.mode == .fullscreen)
+        _ = session.overlayKeyDown(key(kVK_ANSI_D, .option, "∂"))
+        check("再按 ⌥D 切回框选", session.mode == .region)
+
+        // 拖出选区，松开立即识别
+        let selection = CGRect(x: g(210, 430).x, y: g(210, 430).y, width: 280, height: 140)
+        session.overlayMouseDown(at: CGPoint(x: selection.minX, y: selection.maxY))
+        session.overlayMouseDragged(to: CGPoint(x: selection.midX, y: selection.midY))
+        session.overlayMouseDragged(to: CGPoint(x: selection.maxX, y: selection.minY))
+        session.overlayMouseUp(at: CGPoint(x: selection.maxX, y: selection.minY))
+        check("松开鼠标立即开始识别（界面关闭，不用按 Enter）", coordinator.debugSession == nil)
+        check("松开鼠标立即出现结果窗口（识别中显示占位、不用转圈）", controller.debugPreview?.isVisible == true
+              && controller.debugPreview?.model.isRecognizing == true)
+        let started = ContinuousClock.now
+        await controller.debugWait()
+        let elapsed = ContinuousClock.now - started
+        let text = controller.debugPreview?.text ?? ""
+        // 识别结束后焦点会还给原来的 App：结果面板出现时 Snap 可能还在前台，随后失去前台，面板不能跟着消失。
+        // 模拟这个顺序：先让 Snap 到前台，再让它失去前台
+        check("截屏翻译的结果窗口不会被截到（下次冻屏时排除）", controller.debugPreview.map {
+            !ScreenFreezer.capturableOwnWindows.contains(CGWindowID($0.debugWindow.windowNumber)) } == true)
+        check("结果面板不会随 Snap 失去前台而隐藏", controller.debugPreview?.hidesOnDeactivate == false)
+        NSApp.activate()
+        try? await Task.sleep(for: .milliseconds(400))
+        let wasActive = NSApp.isActive
+        NSApp.deactivate()
+        try? await Task.sleep(for: .milliseconds(400))
+        check("Snap 从前台切走后结果面板仍然显示", controller.debugPreview?.isVisible == true,
+              wasActive ? "面板消失了" : "（Snap 没能切到前台，无法模拟）")
+        if !wasActive { check.note("Snap 没能切到前台，「切走后仍显示」只检查了设置项") }
+        check("识别出选区里的英文和中文", text.contains("Snap translate test") && text.contains("截屏翻译自测"),
+              "\(text.debugDescription)，耗时 \(elapsed)")
+        // 新编译的程序第一次识别时，系统要为它准备识别模型（十几秒，只有一次），所以速度看下一次识别
+        check.note("第一次识别耗时（含模型准备）：\(elapsed)")
+        if let frame = controller.debugPreview?.frame, let screen = NSScreen.screen(containing: g(300, 300)) {
+            let panel = frame
+            check("结果面板有实际大小（不是 0×0）", panel.width >= 300 && panel.height >= 60, "\(frame)")
+            check("结果放在选区旁边、不挡住选区", !panel.isEmpty && !panel.intersects(selection)
+                  && screen.visibleFrame.insetBy(dx: -1, dy: -1).contains(panel), "面板 \(panel)，选区 \(selection)")
+        } else {
+            check("结果放在选区旁边、不挡住选区", false, "没有结果面板")
+        }
+        if let window = controller.debugPreview {
+            await runTranslationWindowChecks(window, dir: dir, check: check, pasteboard: testPasteboard)
+        }
+
+        // 单击窗口：识别整个窗口
+        if let session = await begin() {
+            session.overlayMouseMoved(to: g(300, 250))
+            session.overlayMouseDown(at: g(300, 250))
+            session.overlayMouseUp(at: g(300, 250))
+            let clickStarted = ContinuousClock.now
+            await controller.debugWait()
+            let clickElapsed = ContinuousClock.now - clickStarted
+            check("单击窗口：识别整个窗口", coordinator.debugSession == nil
+                  && controller.debugPreview?.text.contains("Snap translate test") == true)
+            check("识别耗时 < 1 秒（模型就绪后）", clickElapsed < .seconds(1), "\(clickElapsed)")
+        }
+
+        // 识别不到文字：结果窗口里提示「未识别到文字」，1.5 秒后自己关闭
+        if let session = await begin() {
+            session.overlayMouseDown(at: g(600, 560))
+            session.overlayMouseDragged(to: g(800, 400))
+            session.overlayMouseUp(at: g(900, 350))
+            let window = controller.debugPreview
+            try? await Task.sleep(for: .milliseconds(600))
+            check("识别不到文字：窗口里提示「未识别到文字」", window?.model.recognitionFailure == "未识别到文字"
+                  && window?.isVisible == true, String(describing: window?.model.recognitionFailure))
+            await controller.debugWait()
+            try? await Task.sleep(for: .milliseconds(200))
+            check("识别不到文字：提示 1.5 秒后窗口自己关闭", window?.isVisible == false && controller.debugPreview == nil)
+        }
+
+        // 全屏模式 + Enter
+        if let session = await begin() {
+            _ = session.overlayKeyDown(key(kVK_ANSI_D, .option, "∂"))
+            _ = session.overlayKeyDown(key(kVK_Return, [], "\r"))
+            await controller.debugWait()
+            // 整屏图片很大，Vision 内部会缩小后识别，小字（尤其笔画多的汉字）可能认错；这里只检查流程和英文
+            check("全屏模式按 Enter 识别整屏", coordinator.debugSession == nil
+                  && controller.debugPreview?.text.contains("Snap translate test") == true,
+                  (controller.debugPreview?.text ?? "没有结果").debugDescription)
+            check.note("全屏识别结果：\((controller.debugPreview?.text ?? "").debugDescription)")
+        }
+        controller.debugPreview?.debugPressEscape()
+        check("结果面板按 Esc 关闭", controller.debugPreview == nil)
+
+        // 取消
+        if let session = await begin() {
+            _ = session.overlayKeyDown(key(kVK_Escape))
+            check("Esc 取消截屏翻译", coordinator.debugSession == nil && controller.debugPreview == nil)
+        }
+        if let session = await begin() {
+            session.overlayRightMouseDown(at: g(300, 250))
+            check("右键取消截屏翻译", coordinator.debugSession == nil)
+        }
+        check("截屏翻译结束后恢复 ⌥D 全局快捷键", HotkeyManager.shared.debugRegisteredCount == 3)
+        controller.debugHUD?.close()
+
+        // 识别在单独的服务进程里做：识别后服务在运行，空闲 30 秒后自己退出（释放内存），之后再识别会自动重新启动
+        check("识别服务进程在运行（识别不在 Snap 进程里做）", ocrServiceRunning())
+        let waitStarted = ContinuousClock.now
+        while ocrServiceRunning(), ContinuousClock.now - waitStarted < .seconds(45) {
+            try? await Task.sleep(for: .seconds(1))
+        }
+        let waited = ContinuousClock.now - waitStarted
+        check("识别服务空闲 30 秒后自动退出", !ocrServiceRunning(), "等了 \(waited) 仍在运行")
+        check.note("识别服务在最后一次识别后约 \(Int(waited.components.seconds)) 秒退出")
+        if let session = await begin() {
+            let restarted = ContinuousClock.now
+            session.overlayMouseDown(at: g(210, 570))
+            session.overlayMouseDragged(to: g(350, 500))
+            session.overlayMouseDragged(to: g(490, 430))
+            session.overlayMouseUp(at: g(490, 430))
+            await controller.debugWait()
+            check("服务退出后再识别：自动重新启动服务", controller.debugPreview?.text.contains("Snap translate test") == true
+                  && ocrServiceRunning(), "结果 \((controller.debugPreview?.text ?? "无").debugDescription)，服务在运行：\(ocrServiceRunning())")
+            check.note("服务重新启动后的识别耗时（含启动）：\(ContinuousClock.now - restarted)")
+            controller.debugPreview?.close()
+        }
+    }
+
+    /// 结果窗口：语言规则、译文、编辑原文自动重新翻译、交换语言、复制、高度变化时顶边不动
+    private static func runTranslationWindowChecks(_ window: TranslationWindow, dir: URL, check: Checks,
+                                                   pasteboard: NSPasteboard) async {
+        let model = window.model
+        func settle() async { try? await Task.sleep(for: .milliseconds(250)) }
+        await settle()
+        check("中英混排、中文为主：原文按中文，目标语言英文", model.sourceLanguage.isChinese && model.targetLanguage == .english,
+              "\(model.sourceLanguage) → \(model.targetLanguage)")
+        check("显示译文", model.translation.hasPrefix("[\(model.sourceLanguage.rawValue)→en]") && model.status == .done,
+              model.translation.debugDescription)
+        // 截一张结果窗口的实际显示（后面垫合成桌面，不拍到真实屏幕）
+        if let screen = NSScreen.screen(containing: CGPoint(x: window.frame.midX, y: window.frame.midY)),
+           let image = DebugShowcase.desktopImage(for: screen) {
+            let backdrop = DebugShowcase.makeBackdrop(for: screen, image: image, level: .normal)
+            try? await Task.sleep(for: .milliseconds(400))
+            await DebugShowcase.captureWindow(window.debugWindow, name: "12-翻译结果窗口.png", dir: dir)
+            // 识别中的样子（占位线）
+            let waiting = TranslationWindow(model: TranslationModel(recognizing: ()), near: window.frame.offsetBy(dx: -500, dy: 0))
+            waiting.show()
+            try? await Task.sleep(for: .milliseconds(500))
+            await DebugShowcase.captureWindow(waiting.debugWindow, name: "12b-识别中.png", dir: dir)
+            waiting.close(reason: "自测")
+            backdrop.close()
+        }
+        let top = window.frame.maxY
+        model.sourceText = "Hello world. This is a longer English sentence that should wrap onto several lines in the result window, so the window grows."
+        try? await Task.sleep(for: .milliseconds(1000))
+        check("编辑原文后自动重新翻译：英文 → 简体中文", model.sourceLanguage == .english && model.targetLanguage == .simplifiedChinese
+              && model.translation.hasPrefix("[en→zh-Hans] Hello world."), model.translation.debugDescription)
+        check("内容变多时窗口向下长、顶边不动", abs(window.frame.maxY - top) < 1 && window.frame.height > 200,
+              "顶边 \(top) → \(window.frame.maxY)，高 \(window.frame.height)")
+        model.targetChoice = .english
+        await settle()
+        check("目标语言和原文相同时自动换成另一种", model.targetLanguage == .simplifiedChinese)
+        model.targetChoice = .japanese
+        await settle()
+        check("手动选目标语言", model.translation.hasPrefix("[en→ja]"), model.translation.debugDescription)
+        model.swapLanguages()
+        await settle()
+        check("交换语言", model.sourceLanguage == .japanese && model.targetLanguage == .english
+              && model.translation.hasPrefix("[ja→en]"), "\(model.sourceLanguage) → \(model.targetLanguage)")
+        window.debugCopyBoth()
+        let copied = pasteboard.string(forType: .string) ?? ""
+        check("复制原文和译文", copied.hasPrefix("Hello world.") && copied.contains("\n\n[ja→en]"), copied.debugDescription)
+        let copyHUD = window.debugCopyHUD
+        check("复制后显示「已复制」提示", copyHUD?.isVisible == true)
+        model.sourceChoice = nil
+        model.targetChoice = nil
+        await settle()
+        check("改回自动检测", model.sourceLanguage == .english && model.targetLanguage == .simplifiedChinese)
+        // 真实的 Apple 翻译（直接通道，不经过窗口）：只在这台机器已经下载了英→简中语言包时测，绝不触发下载提示
+        if #available(macOS 26.0, *), await AppleTranslator.shared.status(from: .english, to: .simplifiedChinese) == .installed {
+            let started = ContinuousClock.now
+            let output = try? await AppleTranslator.shared.translate("Good morning. The weather is nice today.", from: .english, to: .simplifiedChinese)
+            let first = ContinuousClock.now - started
+            let again = ContinuousClock.now
+            _ = try? await AppleTranslator.shared.translate("Screen translation should feel instant.", from: .english, to: .simplifiedChinese)
+            let second = ContinuousClock.now - again
+            check("真实 Apple 翻译（直接通道）：有中文结果", output?.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) } == true,
+                  output ?? "失败")
+            check("直接通道翻译一句 < 0.3 秒（复用会话）", second < .milliseconds(300), "\(second)")
+            check.note("真实 Apple 翻译耗时：第一次 \(first)，复用会话 \(second)")
+            // 长文逐段出来：第一段很快就能显示，整篇的段落分隔保留，结果是简体
+            let paragraph = "A screen capture utility spends almost all of its life waiting. For that reason, the most important decision is how little it costs while doing nothing at all."
+            let long = Array(repeating: paragraph, count: 5).joined(separator: "\n\n")
+            let streamStarted = ContinuousClock.now
+            var firstProgress: Duration?
+            var progressCount = 0
+            let whole = try? await AppleTranslator.shared.translateByParagraph(long, from: .english, to: .simplifiedChinese) { _ in
+                progressCount += 1
+                if firstProgress == nil { firstProgress = ContinuousClock.now - streamStarted }
+            }
+            let total = ContinuousClock.now - streamStarted
+            check("长文逐段显示：第一段 < 0.3 秒就出来", (firstProgress ?? .seconds(9)) < .milliseconds(300) && progressCount == 4,
+                  "第一段 \(String(describing: firstProgress))，回调 \(progressCount) 次")
+            check("逐段翻译保留段落、结果是简体", whole?.components(separatedBy: "\n\n").count == 5
+                  && whole.map { $0 == LanguageRules.normalizedChinese($0, target: .simplifiedChinese) } == true)
+            check.note("5 段长文：第一段 \(String(describing: firstProgress))，全部 \(total)")
+        } else {
+            check.note("这台机器没有英→简中语言包，跳过真实翻译测试")
+        }
+        check("译文混入繁体字时统一成简体", LanguageRules.normalizedChinese("傳統字符與簡化字符不同", target: .simplifiedChinese) == "传统字符与简化字符不同"
+              && LanguageRules.normalizedChinese("Hello 世界", target: .simplifiedChinese) == "Hello 世界"
+              && LanguageRules.normalizedChinese("简体中文", target: .traditionalChinese) == "簡體中文")
+        check("Apple 翻译支持的语言都在列表里", LanguageRules.appleSupported.count == 20
+              && LanguageRules.appleSupported.allSatisfy { $0.localeLanguage.languageCode != nil })
+
+        // 「已复制」提示：结果窗口关闭后会被释放，连同它显示的提示对象一起。提示对象没了也要按时淡出，
+        // 不能一直留在屏幕上。这里模拟：显示提示后，只留住提示的窗口，提示对象本身立即释放
+        window.close(reason: "自测")
+        var hudWindow: NSWindow?
+        do {
+            let hud = RecognitionHUD(around: window.frame)
+            hud.showMessage("已复制译文", symbol: "checkmark.circle.fill")
+            hudWindow = hud.debugWindow
+        }
+        try? await Task.sleep(for: .milliseconds(2300))
+        check("结果窗口关闭后，「已复制」提示仍会自动消失", hudWindow != nil && hudWindow?.isVisible == false,
+              "提示仍在屏幕上")
+    }
+
+    /// 识别服务进程（SnapOCR.xpc）是否在运行
+    private static func ocrServiceRunning() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        // 只认这一份 App 里的服务（/Applications 里正式版的服务可能也在运行）
+        process.arguments = ["-f", Bundle.main.bundlePath + "/Contents/XPCServices/SnapOCR.xpc/Contents/MacOS/SnapOCR"]
+        process.standardOutput = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 
     /// 第 5 阶段：在选区 (100, 100, 200, 150) 上测试各种标注
@@ -342,11 +642,11 @@ enum DebugUITest {
         session.debugSelectTool(.text)
         session.overlayMouseDown(at: g(110, 240)); session.overlayMouseUp(at: g(110, 240))
         annotator.debugType("Snap 标注")
-        check("文字输入时 ⌥1 由截图界面处理（不会打出 ¡）",
+        check("文字输入时 ⌥A 由截图界面处理（不会打出 å）",
               session.overlayShouldIntercept(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .option,
-                                                              timestamp: 0, windowNumber: 0, context: nil, characters: "¡",
-                                                              charactersIgnoringModifiers: "1", isARepeat: false,
-                                                              keyCode: UInt16(kVK_ANSI_1))!))
+                                                              timestamp: 0, windowNumber: 0, context: nil, characters: "å",
+                                                              charactersIgnoringModifiers: "a", isARepeat: false,
+                                                              keyCode: UInt16(kVK_ANSI_A))!))
         annotator.debugTextView?.doCommand(by: #selector(NSResponder.insertNewline(_:)))
         check("文字输入时 Enter 确认文字、不完成截图",
               annotator.document.annotations.count == 4 && !annotator.isEditingText && CaptureCoordinator.shared.debugSession != nil)
@@ -401,12 +701,218 @@ enum DebugUITest {
         session.debugSelectTool(nil)
         render("10-标注")
 
+        // 选中已有标注：拖动、方向键微移、Delete 删除、撤销恢复；最后全部撤销，回到原样
+        let document = annotator.document
+        let first = document.annotations[0]
+        let firstID = first.id
+        func rectOfFirst() -> CGRect? {
+            if case .rectangle(let r)? = document.annotation(withID: firstID)?.shape { return r }
+            return nil
+        }
+        let originalRect = rectOfFirst()
+        // 精准：只有正好在线条上才算「在标注上」（矩形线宽 4 点，边框在 x = 120）。
+        // annotation(at:) 用画布坐标（屏幕内坐标），overlayCursor 用全局坐标
+        check("鼠标在矩形边框上：变成标准指针", annotator.annotation(at: CGPoint(x: 121, y: 145))?.id == firstID
+              && session.overlayCursor(at: g(121, 145)) == .arrow)
+        check("离边框 5 点：不算在标注上，仍是十字", annotator.annotation(at: CGPoint(x: 115, y: 145)) == nil
+              && annotator.annotation(at: CGPoint(x: 126, y: 145)) == nil && session.overlayCursor(at: g(115, 145)) != .arrow)
+        check("方框内部：不算在标注上", annotator.annotation(at: CGPoint(x: 150, y: 135)) == nil)
+        session.overlayMouseDown(at: g(121, 145))
+        check("单击矩形边框：选中这个矩形", annotator.selectedID == firstID)
+        session.overlayMouseDragged(to: g(131, 150))
+        session.overlayMouseDragged(to: g(141, 155))
+        session.overlayMouseUp(at: g(141, 155))
+        check("拖动标注：整体平移 (20, 10)", rectOfFirst() == originalRect?.offsetBy(dx: 20, dy: 10), "\(String(describing: rectOfFirst()))")
+        render("10d-选中并拖动标注")
+        _ = session.overlayKeyDown(key(kVK_RightArrow, false, ""))
+        check("方向键微移选中的标注 1 点", rectOfFirst() == originalRect?.offsetBy(dx: 21, dy: 10))
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        check("⌘Z 两次撤销微移和拖动，回到原位", rectOfFirst() == originalRect, "\(String(describing: rectOfFirst()))")
+        check("撤销后仍保持选中", annotator.selectedID == firstID)
+        _ = session.overlayKeyDown(key(kVK_Delete, false, ""))
+        check("Delete 删除选中的标注，截图界面还在", document.annotations.count == 11 && document.annotation(withID: firstID) == nil
+              && CaptureCoordinator.shared.debugSession != nil && annotator.selectedID == nil)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        check("⌘Z 恢复删除的标注", document.annotations.count == 12 && rectOfFirst() == originalRect)
+        session.overlayMouseDown(at: g(121, 145))
+        session.overlayMouseUp(at: g(121, 145))
+        _ = session.overlayKeyDown(key(kVK_Escape, false, ""))
+        check("Esc 先取消选中，不退出截图", annotator.selectedID == nil && CaptureCoordinator.shared.debugSession != nil)
+        _ = session.overlayKeyDown(key(kVK_Delete, false, ""))
+        check("没有选中时 Delete 不删除任何标注", document.annotations.count == 12)
+
+        // 选着矩形工具：在方框内部可以画新的标注，点边框才是选中
+        session.debugSelectTool(.rectangle)
+        drag(g(140, 130), g(165, 150))
+        check("选着工具时在方框内部画新的标注（不会误选中）", document.annotations.count == 13 && annotator.selectedID == nil)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        session.overlayMouseDown(at: g(121, 145))
+        session.overlayMouseUp(at: g(121, 145))
+        check("选着工具时单击方框边框：选中它（不画新的）", annotator.selectedID == firstID && document.annotations.count == 12)
+        session.overlayMouseDown(at: g(121, 145))
+        session.overlayMouseDragged(to: g(126, 145))
+        session.overlayMouseDragged(to: g(131, 145))
+        session.overlayMouseUp(at: g(131, 145))
+        check("选着工具时拖动已选中的标注：移动它", rectOfFirst() == originalRect?.offsetBy(dx: 10, dy: 0)
+              && document.annotations.count == 12, "\(String(describing: rectOfFirst()))")
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        _ = session.overlayKeyDown(key(kVK_Escape, false, ""))
+        // 选着工具时从未选中的标注上开始拖：画新的标注，不会把它拖走
+        drag(g(121, 145), g(100, 110))
+        check("选着工具时从未选中的标注上拖：画新的标注", document.annotations.count == 13 && rectOfFirst() == originalRect)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+
+        // 序号：删掉第 1 个后，下一个是 3（不会和现有的 2 重复）
+        session.debugSelectTool(nil)
+        session.overlayMouseDown(at: g(260, 120))
+        session.overlayMouseUp(at: g(260, 120))
+        _ = session.overlayKeyDown(key(kVK_Delete, false, ""))
+        check("删掉序号 1 后下一个序号是 3", document.nextCounterNumber == 3 && document.annotations.count == 11)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        check("测试操作全部撤销后，标注恢复原样", document.annotations.count == 12 && rectOfFirst() == originalRect)
+
+        // 选中后在虚线框内任何位置都能拖动（方框内部本来不算「在标注上」）
+        session.overlayMouseDown(at: g(121, 145))
+        session.overlayMouseUp(at: g(121, 145))
+        check("选中后虚线框内部：标准指针", session.overlayCursor(at: g(150, 135)) == .arrow
+              && annotator.grabbableAnnotation(at: CGPoint(x: 150, y: 135))?.id == firstID)
+        session.overlayMouseDown(at: g(150, 135))
+        session.overlayMouseDragged(to: g(155, 138))
+        session.overlayMouseDragged(to: g(160, 140))
+        session.overlayMouseUp(at: g(160, 140))
+        check("在虚线框内部拖动：整体平移 (10, 5)", rectOfFirst() == originalRect?.offsetBy(dx: 10, dy: 5),
+              "\(String(describing: rectOfFirst()))")
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        session.debugSelectTool(.rectangle)
+        session.overlayMouseDown(at: g(150, 135))
+        session.overlayMouseDragged(to: g(160, 135))
+        session.overlayMouseUp(at: g(160, 135))
+        check("选着工具时在已选中标注的虚线框内拖：移动它，不画新的", rectOfFirst() == originalRect?.offsetBy(dx: 10, dy: 0)
+              && document.annotations.count == 12)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        session.debugSelectTool(nil)
+
+        // 不透明度：没选工具时选中标注也显示属性栏；拖滑块改选中的标注，连续拖动合并成一次撤销
+        let originalColor = document.annotation(withID: firstID)?.color ?? .clear
+        check("没选工具、选中标注时显示属性栏和不透明度", toolbar.debugPropertyBarVisible && toolbar.debugShowsOpacity
+              && annotator.selectedID == firstID)
+        toolbar.debugOpacitySlider.set(0.5)
+        toolbar.debugOpacitySlider.set(0.4)
+        check("拖不透明度滑块：选中的标注变成 40%", document.annotation(withID: firstID)?.opacity == 0.4
+              && ToolStyleMemory.style(for: .rectangle).opacity == 0.4)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        check("连续拖动的不透明度一次撤销回 100%", document.annotation(withID: firstID)?.opacity == 1
+              && toolbar.debugOpacitySlider.value == 1)
+
+        // 调色盘：剪贴板里有 C 键复制的颜色代码时，一键使用
+        let testPasteboard = NSPasteboard(name: NSPasteboard.Name("local.snap.uitest.colors"))
+        testPasteboard.clearContents()
+        testPasteboard.setString("#33AA77", forType: .string)
+        ColorPickerView.pasteboard = testPasteboard
+        toolbar.debugToggleColorPicker()
+        check("打开任意颜色调色盘", toolbar.isShowingColorPicker && session.overlayCursor(at: g(150, 135)) == .arrow)
+        check("剪贴板里有颜色代码：显示「使用剪贴板颜色」", toolbar.colorPicker?.debugClipboardButton != nil)
+        if let picker = toolbar.colorPicker, let host = picker.superview, let window = host.window {
+            try? await Task.sleep(for: .milliseconds(300))
+            let area = picker.frame.union(host.convert(toolbar.bounds, from: toolbar))
+            await captureComposite(around: window.convertToScreen(host.convert(area.insetBy(dx: -24, dy: -24), to: nil)),
+                                   to: dir.appendingPathComponent("10e-任意颜色调色盘实际显示.png"))
+        }
+        toolbar.colorPicker?.debugClipboardButton?.action?()
+        check("使用剪贴板颜色：选中的标注变成 #33AA77，调色盘关闭",
+              document.annotation(withID: firstID).map { ColorCode.hex($0.color) } == "#33AA77" && !toolbar.isShowingColorPicker)
+        check("自定义颜色显示在任意颜色按钮上", toolbar.debugCustomColorButton.customColor.map(ColorCode.hex) == "#33AA77")
+        // 输入颜色代码：实时生效；#RRGGBBAA 带不透明度；不合法的代码不改
+        toolbar.debugToggleColorPicker()
+        toolbar.colorPicker?.debugType("#FF000080")
+        let afterAlpha = document.annotation(withID: firstID)
+        check("输入 #FF000080：红色、不透明度 50%", afterAlpha.map { ColorCode.hex($0.color) } == "#FF0000"
+              && abs((afterAlpha?.opacity ?? 0) - 128.0 / 255) < 0.001)
+        toolbar.colorPicker?.debugType("rgb(0, 128, 255)")
+        toolbar.colorPicker?.debugType("#12G")
+        check("输入 rgb(0, 128, 255) 生效，不合法的 #12G 不改",
+              document.annotation(withID: firstID).map { ColorCode.hex($0.color) } == "#0080FF")
+        toolbar.colorPicker?.debugPickHue(1.0 / 3, saturation: 1, brightness: 1)
+        check("在色相条 / 方块上选颜色：变成纯绿，输入框同步",
+              document.annotation(withID: firstID).map { ColorCode.hex($0.color) } == "#00FF00"
+              && toolbar.colorPicker?.debugFieldText == "#00FF00")
+        _ = session.overlayKeyDown(key(kVK_Escape, false, ""))
+        check("Esc 先关调色盘，选中和截图界面都还在", !toolbar.isShowingColorPicker && annotator.selectedID == firstID
+              && CaptureCoordinator.shared.debugSession != nil)
+        check("颜色代码解析", ColorCode.parse("#F53").map { ColorCode.hex($0.color) } == "#FF5533"
+              && ColorCode.parse("0x123456").map { ColorCode.hex($0.color) } == "#123456"
+              && ColorCode.parse(" ff5733\n").map { ColorCode.hex($0.color) } == "#FF5733"
+              && ColorCode.parse("rgba(255, 0, 0, 0.25)")?.opacity == 0.25
+              && ColorCode.parse("12AB3") == nil && ColorCode.parse("rgb(300, 0, 0)") == nil)
+        testPasteboard.releaseGlobally()
+        ColorPickerView.pasteboard = .general
+        // 撤销颜色修改（剪贴板颜色、输入代码、调色盘在 1 秒内连续修改，合并成一次撤销）
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        let restored = document.annotation(withID: firstID)
+        check("一次撤销恢复原来的颜色和不透明度", restored.map { $0.color.isSameColor(as: originalColor) } == true
+              && restored?.opacity == 1, "\(String(describing: restored.map { ColorCode.hex($0.color) }))")
+        annotator.deselect()
+        // 不透明度调低后再用马赛克 / 模糊：仍然完全不透明（否则会几乎看不见，像失效了一样）
+        var faint = AnnotationStyle()
+        faint.opacity = 0.3
+        session.debugSetStyle(faint)
+        session.debugSelectTool(.mosaic)
+        drag(g(150, 160), g(190, 190))
+        session.debugSelectTool(.blur)
+        drag(g(150, 160), g(190, 190))
+        let lastTwo = document.annotations.suffix(2)
+        check("不透明度 30% 时画的马赛克、模糊仍完全不透明", document.annotations.count == 14
+              && lastTwo.allSatisfy { $0.opacity == 1 } && lastTwo.map(\.tool) == [.mosaic, .blur])
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        session.debugSelectTool(nil)
+
+        // 每个工具各自记住上次用的颜色、粗细和不透明度
+        session.debugSetStyle(AnnotationStyle())
+        let green = AnnotationPalette.colors[2], yellow = AnnotationPalette.colors[1]
+        session.debugSelectTool(.rectangle)
+        toolbar.onSelectSize?(.small)
+        toolbar.onSelectColor?(green)
+        session.debugSelectTool(.arrow)
+        check("换到箭头：还是箭头自己的样式（不跟矩形走）", annotator.style.size == .medium
+              && annotator.style.color.isSameColor(as: AnnotationPalette.colors[0]))
+        toolbar.onSelectSize?(.large)
+        toolbar.onSelectColor?(yellow)
+        toolbar.debugOpacitySlider.set(0.6)
+        session.debugSelectTool(.rectangle)
+        check("换回矩形：恢复矩形上次的小号、绿色、100%", annotator.style.size == .small
+              && annotator.style.color.isSameColor(as: green) && annotator.style.opacity == 1)
+        session.debugSelectTool(.arrow)
+        check("换回箭头：恢复箭头上次的大号、黄色、60%", annotator.style.size == .large
+              && annotator.style.color.isSameColor(as: yellow) && annotator.style.opacity == 0.6)
+        drag(g(150, 160), g(190, 190))
+        let newArrow = document.annotations.last
+        check("新画的箭头用箭头的样式", newArrow?.tool == .arrow && newArrow?.size == .large && newArrow?.opacity == 0.6)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        // 选着箭头工具时改选中的矩形：记到矩形上，箭头的样式不变
+        session.overlayMouseDown(at: g(121, 145))
+        session.overlayMouseUp(at: g(121, 145))
+        toolbar.onSelectSize?(.small)
+        check("改选中的矩形：记作矩形的样式，箭头工具的样式不变", annotator.selectedID == firstID
+              && document.annotation(withID: firstID)?.size == .small
+              && ToolStyleMemory.style(for: .rectangle).size == .small && annotator.style.size == .large)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        annotator.deselect()
+        ToolStyleMemory.debugReload()
+        let reloadedArrow = ToolStyleMemory.style(for: .arrow)
+        check("重新启动后仍记得每个工具的样式", reloadedArrow.size == .large && reloadedArrow.opacity == 0.6
+              && reloadedArrow.color.isSameColor(as: yellow) && ToolStyleMemory.style(for: .rectangle).size == .small,
+              "箭头 \(reloadedArrow.size) \(reloadedArrow.opacity) \(ColorCode.hex(reloadedArrow.color))，矩形 \(ToolStyleMemory.style(for: .rectangle).size)")
+        session.debugSelectTool(nil)
+        session.debugSetStyle(AnnotationStyle())
+
         // 全屏模式：工具栏在屏幕底部中央，标注保留
         session.toggleMode()
         check("全屏模式工具栏在底部中央", abs(toolbar.frame.midX - (toolbar.superview?.bounds.midX ?? 0)) < 2 && toolbar.frame.minY < 60,
               "\(toolbar.frame)")
         session.toggleMode()
-        check("切换模式后标注保留", annotator.document.annotations.count == 12)
+        check("切换模式后标注保留", annotator.document.annotations.count == 12, "\(annotator.document.annotations.count) 个")
     }
 
     private static func pngFiles(in directory: URL) -> [URL] {
@@ -532,6 +1038,10 @@ enum DebugUITest {
         func callAsFunction(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") {
             lines.append("\(ok ? "✓" : "✗") \(name)\(ok ? "" : "：\(detail())")  [\(DebugUITest.footprintMB()) MB]")
         }
+        /// 只记录信息，不算通过或失败
+        func note(_ text: String) {
+            lines.append("ℹ︎ \(text)")
+        }
     }
 
     /// 当前进程的内存占用（与活动监视器的「内存」一致）
@@ -569,7 +1079,7 @@ extension NSEvent {
 #if DEBUG
 import AVFoundation
 
-/// 录屏流程自测（只编进 debug 版本）：选区交互、选项条、⌥2 切换 / 停止，并真实录制 2 秒后核对文件参数。
+/// 录屏流程自测（只编进 debug 版本）：选区交互、选项条、⌥S 切换 / 停止，并真实录制 2 秒后核对文件参数。
 /// 录到的视频只读取尺寸、编码等参数，核对完立即删除，不查看画面内容。
 /// 用法：open --env SNAP_RECTEST=/输出目录 build/Snap.app
 @MainActor
@@ -749,14 +1259,14 @@ enum DebugRecordingTest {
         let o = screen.frame.origin
         let scale = screen.backingScaleFactor
         func g(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: o.x + x, y: o.y + y) }
-        let option2 = key(kVK_ANSI_2, .option, "™")
+        let option2 = key(kVK_ANSI_S, .option, "ß")
 
         // 1. 选区界面
         coordinator.beginRecording()
         try? await Task.sleep(for: .milliseconds(600))
-        guard let session = coordinator.debugRecordingSession else { return check("⌥2 打开录屏选区", false) }
-        check("⌥2 打开录屏选区（每块屏幕一个遮罩）", session.debugOverlayCount == NSScreen.screens.count)
-        check("提示条：区域录屏", session.debugHintText.hasPrefix("区域录屏 · ⌥2 切换全屏 · Enter 开始 · Esc 取消"),
+        guard let session = coordinator.debugRecordingSession else { return check("⌥S 打开录屏选区", false) }
+        check("⌥S 打开录屏选区（每块屏幕一个遮罩）", session.debugOverlayCount == NSScreen.screens.count)
+        check("提示条：区域录屏", session.debugHintText.hasPrefix("区域录屏 · ⌥S 切换全屏 · Enter 开始 · Esc 取消"),
               session.debugHintText)
 
         // 2. 拖出选区 → 选项条出现在选区下方
@@ -769,17 +1279,17 @@ enum DebugRecordingTest {
         let bar = session.debugOptionsBar
         check("选项条出现在选区下方", bar.superview != nil && bar.frame.maxY <= 100 - 4, "\(bar.frame)")
 
-        // 3. ⌥2 在区域 / 全屏之间切换，选区保留；忽略按住不放的重复
+        // 3. ⌥S 在区域 / 全屏之间切换，选区保留；忽略按住不放的重复
         _ = session.overlayKeyDown(option2)
-        check("⌥2 切到全屏录屏", session.mode == .fullscreen && session.debugHintText.hasPrefix("全屏录屏 · ⌥2 切换区域"))
+        check("⌥S 切到全屏录屏", session.mode == .fullscreen && session.debugHintText.hasPrefix("全屏录屏 · ⌥S 切换区域"))
         check("全屏模式选项条在底部中央", abs(bar.frame.midX - (bar.superview?.bounds.midX ?? 0)) < 2, "\(bar.frame)")
         let repeatEvent = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .option, timestamp: 0, windowNumber: 0,
-                                           context: nil, characters: "™", charactersIgnoringModifiers: "2", isARepeat: true,
-                                           keyCode: UInt16(kVK_ANSI_2))!
+                                           context: nil, characters: "ß", charactersIgnoringModifiers: "s", isARepeat: true,
+                                           keyCode: UInt16(kVK_ANSI_S))!
         _ = session.overlayKeyDown(repeatEvent)
         check("按住不放的重复被忽略", session.mode == .fullscreen)
         _ = session.overlayKeyDown(option2)
-        check("再按 ⌥2 切回区域，选区保留", session.mode == .region
+        check("再按 ⌥S 切回区域，选区保留", session.mode == .region
               && session.debugSelector.selection?.offsetBy(dx: -o.x, dy: -o.y) == CGRect(x: 100, y: 100, width: 200, height: 150))
 
         // 4. 选项条：切换后写入设置（测完恢复原值）
@@ -790,9 +1300,9 @@ enum DebugRecordingTest {
         let fpsBefore = Preferences.shared.recordingFrameRate
         bar.debugSetFrameRate(.fps60)
 
-        // 5. 录屏选区进行中按 ⌥1 不截图
+        // 5. 录屏选区进行中按 ⌥A 不截图
         coordinator.handleHotkey(.screenshot)
-        check("录屏选区中 ⌥1 不会开始截图", coordinator.debugSession == nil)
+        check("录屏选区中 ⌥A 不会开始截图", coordinator.debugSession == nil)
 
         // 6. 麦克风：自测不录真实的麦克风声音。
         //    没有权限时临时打开「录制麦克风」，验证「没有权限照常录屏 + 控制条提示」；有权限时临时关掉。测完恢复。
@@ -834,7 +1344,7 @@ enum DebugRecordingTest {
                   && !manager.capturesMicrophone)
         }
 
-        // 8. 录 1.5 秒 → 暂停 1.5 秒 → 继续，同时用另一个进程播放系统提示音「Tink」→ 1.2 秒后 ⌥2 停止
+        // 8. 录 1.5 秒 → 暂停 1.5 秒 → 继续，同时用另一个进程播放系统提示音「Tink」→ 1.2 秒后 ⌥S 停止
         try? await Task.sleep(for: .milliseconds(1500))
         controlBar.debugClickPause()
         check("控制条暂停：状态变为暂停，红框变虚线", manager.state == .paused && frameWindow.debugIsDashed)
@@ -857,7 +1367,7 @@ enum DebugRecordingTest {
         let elapsedBeforeStop = manager.elapsed
         coordinator.handleHotkey(.recording)
         try? await Task.sleep(for: .milliseconds(1500))
-        check("录制中 ⌥2 停止录制", manager.state == .idle, "状态 \(manager.state)")
+        check("录制中 ⌥S 停止录制", manager.state == .idle, "状态 \(manager.state)")
         check("停止后控制条和红框消失", manager.debugControlBar == nil && manager.debugFrameWindow == nil
               && !controlBar.isVisible && !frameWindow.isVisible)
         bar.debugSetFrameRate(fpsBefore)

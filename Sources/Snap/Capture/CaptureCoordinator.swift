@@ -1,6 +1,6 @@
 import AppKit
 
-/// 截图 / 录屏的总调度：接收全局快捷键，决定是开始新的会话、交给当前会话处理，还是停止录制。
+/// 截图 / 录屏 / 截屏翻译的总调度：接收全局快捷键，决定是开始新的会话、交给当前会话处理，还是停止录制。
 @MainActor
 final class CaptureCoordinator {
     static let shared = CaptureCoordinator()
@@ -12,9 +12,14 @@ final class CaptureCoordinator {
 
     var screenshotHotkey: Hotkey { Preferences.shared.screenshotHotkey }
     var recordingHotkey: Hotkey { Preferences.shared.recordingHotkey }
+    var translateHotkey: Hotkey { Preferences.shared.translateHotkey }
 
     func hotkey(for action: HotkeyManager.Action) -> Hotkey {
-        action == .screenshot ? screenshotHotkey : recordingHotkey
+        switch action {
+        case .screenshot: screenshotHotkey
+        case .recording: recordingHotkey
+        case .translate: translateHotkey
+        }
     }
 
     func start() {
@@ -23,6 +28,7 @@ final class CaptureCoordinator {
         }
         HotkeyManager.shared.bind(.screenshot, to: screenshotHotkey)
         HotkeyManager.shared.bind(.recording, to: recordingHotkey)
+        HotkeyManager.shared.bind(.translate, to: translateHotkey)
     }
 
     /// 更换快捷键：先检查冲突，通过后注册并保存。返回问题描述，nil 表示设置成功。
@@ -33,10 +39,10 @@ final class CaptureCoordinator {
             HotkeyManager.shared.bind(action, to: old)
             return "\(hotkey.displayString) 已被其他程序占用。"
         }
-        if action == .screenshot {
-            Preferences.shared.screenshotHotkey = hotkey
-        } else {
-            Preferences.shared.recordingHotkey = hotkey
+        switch action {
+        case .screenshot: Preferences.shared.screenshotHotkey = hotkey
+        case .recording: Preferences.shared.recordingHotkey = hotkey
+        case .translate: Preferences.shared.translateHotkey = hotkey
         }
         Log.hotkey.notice("\(action.title, privacy: .public)快捷键改为 \(hotkey.displayString, privacy: .public)")
         return nil
@@ -44,13 +50,15 @@ final class CaptureCoordinator {
 
     func handleHotkey(_ action: HotkeyManager.Action) {
         switch action {
-        case .screenshot:
+        case .screenshot, .translate:
+            let purpose: ScreenshotSession.Purpose = action == .screenshot ? .screenshot : .translate
             if let session = screenshotSession {
-                // 截图界面还没来得及出现时（正在冻屏），全局快捷键仍然有效，由这里转给会话切换模式
-                session.toggleMode()
+                // 界面还没来得及出现时（正在冻屏），全局快捷键仍然有效，由这里转给会话切换模式；
+                // 截图界面里按截屏翻译的快捷键（或反过来）不做任何事
+                if session.purpose == purpose { session.toggleMode() }
             } else if recordingSession == nil {
-                // 录屏选区进行中不截图；录制过程中可以截图
-                beginScreenshot()
+                // 录屏选区进行中不截图；录制过程中可以截图、截屏翻译
+                beginScreenshot(purpose: purpose)
             }
         case .recording:
             if let session = recordingSession {
@@ -66,12 +74,14 @@ final class CaptureCoordinator {
         }
     }
 
-    /// 开始截图。从菜单启动时传入一点延迟，等菜单淡出后再冻屏，避免把菜单截进去
-    func beginScreenshot(delay: Duration = .zero) {
+    /// 开始截图或截屏翻译（共用同一套冻屏、选区界面）。从菜单启动时传入一点延迟，等菜单淡出后再冻屏，避免把菜单截进去
+    func beginScreenshot(delay: Duration = .zero, purpose: ScreenshotSession.Purpose = .screenshot) {
         guard screenshotSession == nil, recordingSession == nil else { return }
         guard PermissionManager.shared.ensureScreenRecording() else { return }
 
-        let session = ScreenshotSession(hotkey: screenshotHotkey)
+        let session = ScreenshotSession(hotkey: purpose == .screenshot ? screenshotHotkey : translateHotkey, purpose: purpose)
+        session.onTranslate = { crop in ScreenTranslateController.shared.recognize(crop) }
+        if purpose == .translate { ScreenTranslateController.shared.warmUp() }
         session.onFinish = { [weak self] in
             self?.screenshotSession = nil
         }

@@ -434,7 +434,7 @@ private final class WarmMenuRow: WarmControl {
 }
 
 /// 菜单打开时铺在下面的透明层：点到它就关闭菜单（这次点击不会传给下面）
-private final class DismissCatcher: NSView {
+final class DismissCatcher: NSView {
     var onDismiss: (() -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { onDismiss?() }

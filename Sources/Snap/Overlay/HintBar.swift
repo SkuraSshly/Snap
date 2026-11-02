@@ -1,6 +1,6 @@
 import AppKit
 
-/// 屏幕顶部中央的模式提示条，例如「区域截图 · ⌥1 切换全屏 · Enter 完成 · Esc 取消」
+/// 屏幕顶部中央的模式提示条，例如「区域截图 · ⌥A 切换全屏 · Enter 完成 · Esc 取消」
 @MainActor
 final class HintBar {
     let view: PillLabel

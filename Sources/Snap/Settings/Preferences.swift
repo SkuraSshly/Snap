@@ -75,7 +75,8 @@ final class Preferences: ObservableObject {
         case recordSystemAudio, recordMicrophone, microphoneDeviceID, recordingShowsCursor
         case recordingCountdown, highlightClicks, recordingShowThumbnail
         case gifFrameRate, gifMaxWidth
-        case screenshotHotkey, recordingHotkey
+        case screenshotHotkey, recordingHotkey, translateHotkey
+        case ocrSmartLayout, ocrDetectsQRCodes, ocrPreferredLanguage
     }
 
     // MARK: 通用
@@ -115,9 +116,18 @@ final class Preferences: ObservableObject {
     @Published var gifFrameRate: GIFFrameRate { didSet { Self.save(gifFrameRate.rawValue, .gifFrameRate) } }
     @Published var gifMaxWidth: GIFMaxWidth { didSet { Self.save(gifMaxWidth.rawValue, .gifMaxWidth) } }
 
+    // MARK: 截屏翻译
+    /// 智能排版（合并段落、处理连字符和中英文空格）；关闭时保留原始换行
+    @Published var ocrSmartLayout: Bool { didSet { Self.save(ocrSmartLayout, .ocrSmartLayout) } }
+    /// 同时识别二维码（默认关闭）
+    @Published var ocrDetectsQRCodes: Bool { didSet { Self.save(ocrDetectsQRCodes, .ocrDetectsQRCodes) } }
+    /// OCR 优先语言（TranslateLanguage 的 rawValue），空字符串表示跟随系统语言
+    @Published var ocrPreferredLanguage: String { didSet { Self.save(ocrPreferredLanguage, .ocrPreferredLanguage) } }
+
     // MARK: 快捷键（存成 [键码, 修饰键]）
     @Published var screenshotHotkey: Hotkey { didSet { Self.save(screenshotHotkey.stored, .screenshotHotkey) } }
     @Published var recordingHotkey: Hotkey { didSet { Self.save(recordingHotkey.stored, .recordingHotkey) } }
+    @Published var translateHotkey: Hotkey { didSet { Self.save(translateHotkey.stored, .translateHotkey) } }
 
     /// 是否已经走完首次运行的权限引导（界面不需要监听它，所以不用 @Published）
     var hasCompletedOnboarding: Bool {
@@ -154,8 +164,20 @@ final class Preferences: ObservableObject {
         gifFrameRate = Self.loadEnum(.gifFrameRate, GIFFrameRate.fps15)
         gifMaxWidth = Self.loadEnum(.gifMaxWidth, GIFMaxWidth.w960)
 
+        ocrSmartLayout = Self.load(.ocrSmartLayout, true)
+        ocrDetectsQRCodes = Self.load(.ocrDetectsQRCodes, false)
+        ocrPreferredLanguage = Self.load(.ocrPreferredLanguage, "")
+
         screenshotHotkey = Hotkey(stored: Self.load(.screenshotHotkey, [Int]())) ?? .defaultScreenshot
         recordingHotkey = Hotkey(stored: Self.load(.recordingHotkey, [Int]())) ?? .defaultRecording
+        translateHotkey = Hotkey(stored: Self.load(.translateHotkey, [Int]())) ?? .defaultTranslate
+        // 默认快捷键从 ⌥1 / ⌥2 / ⌥3 改成 ⌥A / ⌥S / ⌥D：还在用旧默认值的一次性换成新的（只做一次，之后自己改回 ⌥1 也会保留）
+        if !UserDefaults.standard.bool(forKey: "hotkeysMigratedToASD") {
+            if screenshotHotkey == Hotkey.legacyDefaults[0] { screenshotHotkey = .defaultScreenshot }
+            if recordingHotkey == Hotkey.legacyDefaults[1] { recordingHotkey = .defaultRecording }
+            if translateHotkey == Hotkey.legacyDefaults[2] { translateHotkey = .defaultTranslate }
+            UserDefaults.standard.set(true, forKey: "hotkeysMigratedToASD")
+        }
     }
 
     // MARK: 读写辅助

@@ -24,10 +24,22 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
 cp "$PLIST" "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # 图标（由 scripts/make-icon.swift 生成）
+# 截屏翻译的文字识别服务（XPC 服务：按需启动，空闲 30 秒后自动退出）
+SERVICE="$APP/Contents/XPCServices/SnapOCR.xpc"
+SERVICE_PLIST="Resources/OCRService-Info.plist"
+SERVICE_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$SERVICE_PLIST")"
+mkdir -p "$SERVICE/Contents/MacOS"
+cp "$BIN_DIR/SnapOCRService" "$SERVICE/Contents/MacOS/SnapOCR"
+cp "$SERVICE_PLIST" "$SERVICE/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 echo "▸ 签名（${SIGN_IDENTITY}）"
+# 先签里面的服务，再签整个 App
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --sign - \
+    --identifier "$SERVICE_ID" \
+    --requirements "=designated => identifier \"$SERVICE_ID\"" \
+    "$SERVICE"
   # ad-hoc 签名默认的「指定要求」(designated requirement) 是二进制的 cdhash，
   # 每次重新编译都会变化，系统会把新版本当成另一个 App，屏幕录制权限随之失效。
   # 这里把指定要求显式设为 bundle id，重新编译后已授予的权限依然有效（仅适合本机自用）。
@@ -36,6 +48,7 @@ if [[ "$SIGN_IDENTITY" == "-" ]]; then
     --requirements "=designated => identifier \"$BUNDLE_ID\"" \
     "$APP"
 else
+  codesign --force --sign "$SIGN_IDENTITY" --identifier "$SERVICE_ID" "$SERVICE"
   codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP"
 fi
 

@@ -8,8 +8,13 @@ struct Hotkey: Hashable, Codable {
     var keyCode: UInt32
     var carbonModifiers: UInt32
 
-    static let defaultScreenshot = Hotkey(keyCode: UInt32(kVK_ANSI_1), carbonModifiers: UInt32(optionKey))
-    static let defaultRecording = Hotkey(keyCode: UInt32(kVK_ANSI_2), carbonModifiers: UInt32(optionKey))
+    static let defaultScreenshot = Hotkey(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(optionKey))
+    static let defaultRecording = Hotkey(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: UInt32(optionKey))
+    static let defaultTranslate = Hotkey(keyCode: UInt32(kVK_ANSI_D), carbonModifiers: UInt32(optionKey))
+    /// 1.0 版的默认快捷键 ⌥1 / ⌥2 / ⌥3（升级时还在用旧默认值的，改成新默认值）
+    static let legacyDefaults: [Hotkey] = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3].map {
+        Hotkey(keyCode: UInt32($0), carbonModifiers: UInt32(optionKey))
+    }
 
     /// ⌃⌥⇧⌘ 四个修饰键（Carbon）
     static let modifierMask = UInt32(cmdKey | shiftKey | optionKey | controlKey)

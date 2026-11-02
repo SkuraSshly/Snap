@@ -14,7 +14,7 @@ final class AnnotationLayer: CALayer {
     override func action(forKey event: String) -> CAAction? { nil }
 }
 
-/// 标注的交互：拖拽画形状、单击放序号、文字输入，以及撤销 / 重做。
+/// 标注的交互：拖拽画形状、单击放序号、文字输入、选中已有标注后拖动 / 删除，以及撤销 / 重做。
 /// 截图界面和重新编辑窗口共用。所有坐标都是画布坐标（见 Annotation）。
 @MainActor
 final class AnnotationController: NSObject, NSTextViewDelegate {
@@ -28,7 +28,11 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     /// 当前工具；nil 表示没有选工具（截图界面里此时鼠标用来调整选区）
     var tool: AnnotationTool? {
         didSet {
-            if tool != oldValue { endTextEditing() }
+            if tool != oldValue {
+                endTextEditing()
+                // 换工具：换成这个工具上次用的颜色、粗细和不透明度
+                if let tool { style = ToolStyleMemory.style(for: tool) }
+            }
             onChange?()
         }
     }
@@ -46,6 +50,12 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
 
     private var inProgress: Annotation?
     private var dragStart: CGPoint?
+    /// 选中的标注（画虚线框；可拖动、按 Delete 删除、方向键微移）
+    private(set) var selectedID: UUID?
+    /// 正在拖动的标注：起点、拖动前的样子、是否已记撤销点
+    private var moving: (start: CGPoint, original: Annotation, recordedUndo: Bool)?
+    /// 选着绘图工具时按在了某个标注上：如果只是单击（没画出东西），松开时选中它
+    private var clickedAnnotation: Annotation?
     private var textView: NSTextView?
     private var textTopLeft: CGPoint = .zero
 
@@ -66,6 +76,18 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         if let inProgress {
             renderer.draw(inProgress, in: ctx)
         }
+        // 选中框：只画在屏幕上，不进入输出的图片
+        if let selectedID, let selected = document.annotation(withID: selectedID) {
+            let frame = selected.bounds.insetBy(dx: -4, dy: -4)
+            ctx.saveGState()
+            ctx.setLineWidth(1.5)
+            ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.9).cgColor)
+            ctx.stroke(frame)
+            ctx.setStrokeColor(OverlayAccent.screenshot.cgColor)
+            ctx.setLineDash(phase: 0, lengths: [5, 3])
+            ctx.stroke(frame)
+            ctx.restoreGState()
+        }
     }
 
     private func redraw() {
@@ -81,12 +103,121 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
 
     func undo() {
         endTextEditing()
-        if document.undo() { redraw(); onChange?() }
+        if document.undo() { dropStaleSelection(); redraw(); onChange?() }
     }
 
     func redo() {
         endTextEditing()
-        if document.redo() { redraw(); onChange?() }
+        if document.redo() { dropStaleSelection(); redraw(); onChange?() }
+    }
+
+    /// 撤销后选中的标注可能已经不存在了
+    private func dropStaleSelection() {
+        lastStyleEdit = nil
+        if let selectedID, document.annotation(withID: selectedID) == nil { self.selectedID = nil }
+    }
+
+    // MARK: - 选中、移动、删除
+
+    /// 鼠标正好在其上的标注（有重叠时取最上面的）
+    func annotation(at point: CGPoint) -> Annotation? {
+        document.annotations.last { $0.contains(point) }
+    }
+
+    /// 按下去能拖动的标注：选中标注的虚线框内任何位置都算，其他标注要正好按在画出来的地方
+    func grabbableAnnotation(at point: CGPoint) -> Annotation? {
+        if let selected = selectedAnnotation, selected.bounds.insetBy(dx: -4, dy: -4).contains(point) { return selected }
+        return annotation(at: point)
+    }
+
+    var hasSelection: Bool { selectedID != nil }
+    var selectedAnnotation: Annotation? { selectedID.flatMap { document.annotation(withID: $0) } }
+
+    /// 属性栏显示的样式：有选中标注时显示它的颜色 / 粗细 / 不透明度
+    var displayedStyle: AnnotationStyle {
+        guard let selected = selectedAnnotation else { return style }
+        var shown = style
+        if selected.tool.usesColor { shown.color = selected.color }
+        shown.size = selected.size
+        if selected.allowsOpacity { shown.opacity = selected.opacity }
+        return shown
+    }
+
+    /// 上次改样式的标注和时间：连续拖滑块 / 调色盘时合并成一次撤销
+    private var lastStyleEdit: (id: UUID, time: Date)?
+
+    /// 在属性栏改了样式。有选中标注时改它（可撤销），并记作它那种工具上次用的样式；
+    /// 没有选中时改当前工具的样式，作为之后新画标注的样式
+    func applyStyle(_ newStyle: AnnotationStyle) {
+        guard var selected = selectedAnnotation else {
+            style = newStyle
+            if let tool { ToolStyleMemory.remember(newStyle, for: tool) }
+            return
+        }
+        ToolStyleMemory.remember(newStyle, for: selected.tool)
+        if tool == selected.tool { style = newStyle }
+        var changed = selected
+        if selected.tool.usesColor { changed.color = newStyle.color }
+        changed.size = newStyle.size
+        if selected.allowsOpacity { changed.opacity = newStyle.opacity }
+        guard changed.color != selected.color || changed.size != selected.size || changed.opacity != selected.opacity else { return }
+        let now = Date()
+        if lastStyleEdit?.id != selected.id || now.timeIntervalSince(lastStyleEdit!.time) > 1 {
+            document.recordUndo()
+        }
+        lastStyleEdit = (selected.id, now)
+        selected = changed
+        document.replace(selected)
+        renderer.clearPatch(for: selected.id)
+        redraw()
+        onChange?()
+    }
+    var isMovingAnnotation: Bool { moving != nil }
+
+    /// 取消选中；原来有选中的返回 true
+    @discardableResult
+    func deselect() -> Bool {
+        guard selectedID != nil else { return false }
+        selectedID = nil
+        redraw()
+        onChange?()
+        return true
+    }
+
+    /// 删除选中的标注（可撤销）
+    @discardableResult
+    func deleteSelection() -> Bool {
+        guard let selectedID, document.remove(id: selectedID) else { return false }
+        self.selectedID = nil
+        renderer.clearPatch(for: selectedID)
+        redraw()
+        onChange?()
+        return true
+    }
+
+    /// 方向键微移选中的标注（每按一次可单独撤销）
+    @discardableResult
+    func moveSelection(dx: CGFloat, dy: CGFloat) -> Bool {
+        guard let selectedID, let selected = document.annotation(withID: selectedID) else { return false }
+        let offset = clampedOffset(CGVector(dx: dx, dy: dy), for: selected)
+        guard offset.dx != 0 || offset.dy != 0 else { return true }
+        document.recordUndo()
+        lastStyleEdit = nil
+        document.replace(selected.moved(by: offset))
+        redraw()
+        onChange?()
+        return true
+    }
+
+    /// 移动后仍留在可画范围内（标注比范围还大时不限制）
+    private func clampedOffset(_ offset: CGVector, for annotation: Annotation) -> CGVector {
+        guard !canvasBounds.isEmpty else { return offset }
+        let b = annotation.bounds
+        func clamp(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
+            low <= high ? min(max(value, low), high) : value
+        }
+        return CGVector(dx: clamp(offset.dx, canvasBounds.minX - b.minX, canvasBounds.maxX - b.maxX),
+                        dy: clamp(offset.dy, canvasBounds.minY - b.minY, canvasBounds.maxY - b.maxY))
     }
 
     // MARK: - 鼠标
@@ -94,20 +225,49 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     /// 返回 true 表示这次按下由标注处理
     @discardableResult
     func mouseDown(at point: CGPoint, shift: Bool) -> Bool {
-        guard let tool else { return false }
         // 正在输入文字时点别处：先确认这段文字
         if isEditingText {
             endTextEditing()
             if tool == .text { return true }
         }
-        guard canvasBounds.contains(point) else { return false }
+        // 拖动已有标注：
+        // - 没选绘图工具时，按住任何标注都可以直接拖
+        // - 选着绘图工具时，按住拖动是画新的标注；要移动，先单击选中，再拖已选中的那个
+        // - 已选中的标注：虚线框内任何位置都可以拖
+        let hit = annotation(at: point)
+        if let selected = selectedAnnotation, selected.bounds.insetBy(dx: -4, dy: -4).contains(point) {
+            moving = (point, selected, false)
+            return true
+        }
+        if let hit, tool == nil || hit.id == selectedID {
+            selectedID = hit.id
+            lastStyleEdit = nil
+            moving = (point, hit, false)
+            redraw()
+            onChange?()
+            return true
+        }
+        deselect()
+        clickedAnnotation = hit
+        guard let tool else { return false }
+        // 序号、文字工具的「单击」就是创建；单击在已有标注上时改为选中它
+        if let hit, tool == .counter || tool == .text {
+            clickedAnnotation = nil
+            selectedID = hit.id
+            lastStyleEdit = nil
+            moving = (point, hit, false)
+            redraw()
+            onChange?()
+            return true
+        }
+        guard canvasBounds.contains(point) else { return clickedAnnotation != nil }
 
         switch tool {
         case .text:
             beginTextEditing(at: point)
         case .counter:
             let annotation = Annotation(shape: .counter(document.nextCounterNumber, center: point),
-                                        color: style.color, size: style.size)
+                                        color: style.color, size: style.size, opacity: style.opacity)
             document.add(annotation)
             redraw()
             onChange?()
@@ -120,6 +280,20 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     }
 
     func mouseDragged(to point: CGPoint, shift: Bool) {
+        if var moving {
+            let offset = clampedOffset(CGVector(dx: point.x - moving.start.x, dy: point.y - moving.start.y), for: moving.original)
+            // 真的动了才记撤销点（单击选中不算一次修改）
+            if !moving.recordedUndo {
+                guard hypot(offset.dx, offset.dy) >= 1 else { return }
+                document.recordUndo()
+                lastStyleEdit = nil
+                moving.recordedUndo = true
+                self.moving = moving
+            }
+            document.replace(moving.original.moved(by: offset))
+            redraw()
+            return
+        }
         guard let tool, let start = dragStart, var current = inProgress else { return }
         let p = point.clamped(to: canvasBounds)
         switch (tool, current.shape) {
@@ -136,14 +310,34 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     }
 
     func mouseUp(at point: CGPoint, shift: Bool) {
-        guard let annotation = inProgress else { return }
+        if moving != nil {
+            moving = nil
+            onChange?()
+            return
+        }
+        let clicked = clickedAnnotation
+        clickedAnnotation = nil
+        guard let annotation = inProgress else {
+            if let clicked { select(clicked) }
+            return
+        }
         inProgress = nil
         dragStart = nil
         if isMeaningful(annotation) {
             document.add(annotation)
             onChange?()
+        } else if let clicked {
+            // 只是单击了一下已有的标注：选中它
+            select(clicked)
         }
         redraw()
+    }
+
+    private func select(_ annotation: Annotation) {
+        selectedID = annotation.id
+        lastStyleEdit = nil
+        redraw()
+        onChange?()
     }
 
     /// 太小的形状视为误触（单击一下不留下东西）
@@ -195,7 +389,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
             existing.shape = shape
             return existing
         }
-        return Annotation(shape: shape, color: style.color, size: style.size)
+        return Annotation(shape: shape, color: style.color, size: style.size, opacity: style.opacity)
     }
 
     // MARK: - 文字输入
@@ -280,7 +474,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         textView.removeFromSuperview()
         window?.makeFirstResponder(nil)
         if !string.isEmpty {
-            document.add(Annotation(shape: .text(string, topLeft: textTopLeft), color: style.color, size: style.size))
+            document.add(Annotation(shape: .text(string, topLeft: textTopLeft), color: style.color, size: style.size, opacity: style.opacity))
             redraw()
         }
         onChange?()

@@ -61,15 +61,24 @@ enum ScreenFreezer {
         try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     }
 
-    /// Snap 自己的窗口（缩略图、提示条等），截图时要排除。以下两种除外：
-    /// - 菜单栏图标：它属于菜单栏的一部分，排除掉反而会在菜单栏上留下一块空缺
-    /// - 钉图：它是用户钉在屏幕上的内容，应该和其他窗口一样能被截进去（与 Snipaste 一致）
+    /// 标记「普通窗口」的 identifier：设置、权限设置、标注编辑、视频预览。
+    /// 它们和其他 App 的窗口一样，可以被截图、录屏、截屏翻译截到（也能悬停识别、单击选中）。
+    static let capturableIdentifier = NSUserInterfaceItemIdentifier("local.snap.capturable")
+
+    /// 可以被截到的 Snap 窗口：上面那些普通窗口 + 钉图（用户钉在屏幕上的内容，与 Snipaste 一致）
+    static var capturableOwnWindows: Set<CGWindowID> {
+        let normal = NSApp.windows.filter { $0.identifier == capturableIdentifier && $0.isVisible && $0.windowNumber > 0 }
+        return Set(normal.map { CGWindowID($0.windowNumber) }).union(PinManager.shared.windowNumbers)
+    }
+
+    /// 截图时要排除的 Snap 窗口：截图 / 录屏界面、缩略图、录制控件、截屏翻译的结果窗口和提示等临时界面。
+    /// 菜单栏图标不排除：它属于菜单栏的一部分，排除掉反而会在菜单栏上留下一块空缺
     static func ownWindows(in content: SCShareableContent) -> [SCWindow] {
         let pid = ProcessInfo.processInfo.processIdentifier
         let statusLevel = Int(CGWindowLevelForKey(.statusWindow))
-        let pins = PinManager.shared.windowNumbers
+        let capturable = capturableOwnWindows
         return content.windows.filter {
-            $0.owningApplication?.processID == pid && $0.windowLayer != statusLevel && !pins.contains($0.windowID)
+            $0.owningApplication?.processID == pid && $0.windowLayer != statusLevel && !capturable.contains($0.windowID)
         }
     }
 

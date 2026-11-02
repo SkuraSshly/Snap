@@ -48,9 +48,10 @@ final class VideoPreviewWindowController: NSWindowController, NSWindowDelegate {
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = url.lastPathComponent
+        window.identifier = ScreenFreezer.capturableIdentifier
         window.isReleasedWhenClosed = false
         window.contentAspectRatio = size
-        window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
+        window.centerOnScreen()
 
         playerView.player = AVPlayer(url: url)
         playerView.controlsStyle = .floating

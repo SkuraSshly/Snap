@@ -19,6 +19,24 @@ extension NSScreen {
     }
 }
 
+extension NSWindow {
+    /// 一级窗口：放在鼠标所在屏幕的正中间（可用区域的中心，不含菜单栏和程序坞）。
+    /// 系统自带的 center() 会偏上，这里是严格居中
+    func centerOnScreen() {
+        guard let visible = (NSScreen.underMouse ?? screen ?? NSScreen.main)?.visibleFrame else { return }
+        setFrameOrigin(CGPoint(x: (visible.midX - frame.width / 2).rounded(), y: (visible.midY - frame.height / 2).rounded()))
+    }
+
+    /// 二级窗口：放在父窗口的正中间，并跟着父窗口一起移动、保持在它上面
+    func center(over parent: NSWindow) {
+        let target = CGPoint(x: (parent.frame.midX - frame.width / 2).rounded(), y: (parent.frame.midY - frame.height / 2).rounded())
+        setFrameOrigin(target)
+        if parent.childWindows?.contains(self) != true {
+            parent.addChildWindow(self, ordered: .above)
+        }
+    }
+}
+
 extension CGRect {
     /// 点到矩形的距离（点在矩形内为 0）
     func distance(to point: CGPoint) -> CGFloat {

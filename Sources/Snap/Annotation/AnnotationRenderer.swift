@@ -46,6 +46,7 @@ final class AnnotationRenderer {
     func draw(_ annotation: Annotation, in ctx: CGContext) {
         ctx.saveGState()
         defer { ctx.restoreGState() }
+        ctx.setAlpha(annotation.allowsOpacity ? annotation.opacity : 1)
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
         let color = annotation.color.cgColor

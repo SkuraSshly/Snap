@@ -10,7 +10,7 @@ struct RecordingTarget {
     let scale: CGFloat
 }
 
-/// 录屏选区：交互与截图一致（窗口识别、拖拽、控制点、方向键微调、⌥2 切换区域 / 全屏），区别是：
+/// 录屏选区：交互与截图一致（窗口识别、拖拽、控制点、方向键微调、⌥S 切换区域 / 全屏），区别是：
 /// - 不冻屏，选区阶段下面是实时画面
 /// - 选区用红色，以区别于截图
 /// - 选区旁是录制选项条（系统声音、麦克风、指针、帧率）
@@ -53,7 +53,7 @@ final class RecordingSelectionSession: OverlayEventHandler {
         observe(NSApplication.didChangeScreenParametersNotification) { $0.cancel() }
 
         // 不冻屏：直接在每块屏幕上盖透明遮罩
-        selector.windows = WindowList.snapshot(includingOwn: PinManager.shared.windowNumbers)
+        selector.windows = WindowList.snapshot(includingOwn: ScreenFreezer.capturableOwnWindows)
         for screen in NSScreen.screens {
             let id = screen.displayID
             screens[id] = screen
@@ -70,7 +70,7 @@ final class RecordingSelectionSession: OverlayEventHandler {
         refresh()
         for (id, window) in overlays where id != activeDisplayID { window.orderFrontRegardless() }
         overlays[activeDisplayID]?.makeKeyAndOrderFront(nil)
-        HotkeyManager.shared.suspend(.recording)   // 之后的 ⌥2 由遮罩窗口自己处理
+        HotkeyManager.shared.suspend(.recording)   // 之后的 ⌥S 由遮罩窗口自己处理
         activateForCursor()
         Log.capture.notice("录屏选区已出现")
     }

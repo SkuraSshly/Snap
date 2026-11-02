@@ -1,73 +1,68 @@
 import SwiftUI
 
-/// 录屏：画面、编码、声音、其他
+/// 录屏：画面、声音、录制、完成后、GIF
 struct RecordingSettingsView: View {
     @ObservedObject private var prefs = Preferences.shared
 
     var body: some View {
         SettingsPane {
-            Picker("分辨率：", selection: $prefs.recordingResolution) {
-                ForEach(RecordingResolution.allCases) { Text($0.title).tag($0) }
-            }
-            .fixedSize()
-
-            Picker("帧率：", selection: $prefs.recordingFrameRate) {
-                ForEach(RecordingFrameRate.allCases) { Text($0.title).tag($0) }
-            }
-            .fixedSize()
-
-            Picker("编码：", selection: $prefs.videoCodec) {
-                ForEach(VideoCodec.allCases) { Text($0.title).tag($0) }
-            }
-            .fixedSize()
-
-            Picker("画质：", selection: $prefs.videoQuality) {
-                ForEach(VideoQuality.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
-
-            LabeledContent("声音：") {
-                OptionStack {
-                    Toggle("录制系统声音", isOn: $prefs.recordSystemAudio)
-                    Toggle("录制麦克风", isOn: $prefs.recordMicrophone)
-                    Text("录制时可在选区旁的选项条里临时更改，会记住上次的选择。")
-                        .settingsCaption()
-                }
+            SettingsSection(title: "文件", footer: "录屏总是自动保存为 MP4。文件名示例：\(SaveLocation.fileName(prefix: "录屏", fileExtension: "mp4"))") {
+                FolderRow(kind: .recording, icon: "folder.fill", tint: .chipHoney, title: "保存到",
+                          path: $prefs.recordingDirectoryPath, isFirst: true)
             }
 
-            LabeledContent("录制：") {
-                OptionStack {
-                    Toggle("显示鼠标指针", isOn: $prefs.recordingShowsCursor)
-                    Toggle("高亮鼠标点击", isOn: $prefs.highlightClicks)
-                    Text("点击处出现杏色圆圈（右键为珊瑚色），会录进视频。").settingsCaption()
-                    Toggle("开始前 3 秒倒计时", isOn: $prefs.recordingCountdown)
-                    Text("倒计时期间按 Esc 取消，按 Enter 立即开始。").settingsCaption()
-                }
-            }
-
-            LabeledContent("完成后：") {
-                OptionStack {
-                    Toggle("在屏幕角落显示缩略图", isOn: $prefs.recordingShowThumbnail)
-                    Text("录屏总是自动保存到录屏文件夹。缩略图上可以预览、拷贝文件、导出 GIF、移到废纸篓。").settingsCaption()
-                }
-            }
-
-            LabeledContent("GIF：") {
-                OptionStack {
-                    HStack(spacing: 8) {
-                        Picker("", selection: $prefs.gifFrameRate) {
-                            ForEach(GIFFrameRate.allCases) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                        Picker("", selection: $prefs.gifMaxWidth) {
-                            ForEach(GIFMaxWidth.allCases) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
+            SettingsSection(title: "画面", footer: codecFooter) {
+                SettingsPair(isFirst: true) {
+                    SettingsTile(icon: "aspectratio", tint: .chipSky, title: "分辨率") {
+                        WarmSegmented(options: [(RecordingResolution.native, "原生"), (.p1080, "1080p")],
+                                      selection: $prefs.recordingResolution, segmentWidth: 56)
                     }
-                    Text("在录屏缩略图上点「GIF」，或菜单栏「将录屏转为 GIF…」。GIF 最多 256 色，适合界面演示；大面积渐变和照片会有色带。").settingsCaption()
+                } right: {
+                    SettingsTile(icon: "speedometer", tint: .chipHoney, title: "帧率") {
+                        WarmSegmented(options: [(RecordingFrameRate.fps60, "60 fps"), (.fps30, "30 fps")],
+                                      selection: $prefs.recordingFrameRate, segmentWidth: 56)
+                    }
+                }
+                SettingsPair {
+                    SettingsTile(icon: "cpu", tint: .chipLavender, title: "编码") {
+                        WarmSegmented(options: [(VideoCodec.hevc, "HEVC"), (.h264, "H.264")], selection: $prefs.videoCodec,
+                                      segmentWidth: 56)
+                    }
+                } right: {
+                    SettingsTile(icon: "sparkles", tint: .apricot, title: "画质") {
+                        WarmSegmented(options: VideoQuality.allCases.map { ($0, $0.title) }, selection: $prefs.videoQuality,
+                                      segmentWidth: 56)
+                    }
+                }
+            }
+
+            SettingsSection(title: "声音", footer: "录制时可在选区旁的选项条里临时更改，会记住上次的选择。") {
+                SwitchRow(icon: "speaker.wave.2.fill", tint: .chipSage, title: "录制系统声音", isFirst: true,
+                          isOn: $prefs.recordSystemAudio)
+                SwitchRow(icon: "mic.fill", tint: .chipRose, title: "录制麦克风", isOn: $prefs.recordMicrophone)
+            }
+
+            SettingsSection(title: "录制") {
+                SwitchRow(icon: "cursorarrow", tint: .chipCocoa, title: "显示鼠标指针", isFirst: true,
+                          isOn: $prefs.recordingShowsCursor)
+                SwitchRow(icon: "cursorarrow.click.2", tint: .apricot, title: "高亮鼠标点击",
+                          caption: "点击处出现杏色圆圈（右键为珊瑚色），会录进视频。", isOn: $prefs.highlightClicks)
+                SwitchRow(icon: "timer", tint: .coral, title: "开始前 3 秒倒计时",
+                          caption: "倒计时期间按 Esc 取消，按 Enter 立即开始。", isOn: $prefs.recordingCountdown)
+                SwitchRow(icon: "rectangle.inset.bottomright.filled", tint: .chipSky, title: "完成后在屏幕角落显示缩略图",
+                          caption: "缩略图上可以预览、拷贝文件、导出 GIF、移到废纸篓。",
+                          isOn: $prefs.recordingShowThumbnail)
+            }
+
+            SettingsSection(title: "GIF",
+                            footer: "在录屏缩略图上点「GIF」，或菜单栏「将录屏转为 GIF…」。GIF 最多 256 色，适合界面演示。") {
+                SettingsRow(icon: "photo.stack", tint: .chipLavender, title: "帧率", isFirst: true) {
+                    WarmSegmented(options: GIFFrameRate.allCases.map { ($0, $0.title) }, selection: $prefs.gifFrameRate,
+                                  segmentWidth: 58)
+                }
+                SettingsRow(icon: "arrow.left.and.right", tint: .chipHoney, title: "最大宽度") {
+                    WarmSegmented(options: GIFMaxWidth.allCases.map { ($0, $0 == .original ? "原宽" : "\($0.rawValue)") },
+                                  selection: $prefs.gifMaxWidth, segmentWidth: 54)
                 }
             }
         }
@@ -77,5 +72,9 @@ struct RecordingSettingsView: View {
                 PermissionManager.shared.requestMicrophone()
             }
         }
+    }
+
+    private var codecFooter: String {
+        prefs.videoCodec == .hevc ? "HEVC：画质高、体积小。" : "H.264：兼容性更好，老设备和网页也能直接播放。"
     }
 }

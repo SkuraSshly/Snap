@@ -30,6 +30,7 @@ enum DebugFeatureTest {
 
             testStaleFileCleanup(check)
             testHotkeys(check)
+            await testSettingsWindow(check)
             await testHotkeyRecorder(check, dir: dir)
             // SNAP_FEATURETEST_ONLY=hotkeys：只测快捷键（不弹出选区、不录制，不打扰正在使用电脑的人）
             if ProcessInfo.processInfo.environment["SNAP_FEATURETEST_ONLY"] != "hotkeys" {
@@ -56,6 +57,44 @@ enum DebugFeatureTest {
     private static func key(_ code: Int, _ flags: NSEvent.ModifierFlags = [], _ chars: String = "", window: Int = 0) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: window, context: nil,
                          characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: UInt16(code))!
+    }
+
+    /// 设置窗口：左侧栏目、右侧内容；切换栏目时窗口位置和大小都不变（不跳动）
+    private static func testSettingsWindow(_ check: DebugUITest.Checks) async {
+        SettingsWindowController.show(.general)
+        try? await Task.sleep(for: .milliseconds(800))
+        guard let window = SettingsWindowController.debugCurrent?.debugWindow else { return check("打开设置窗口", false) }
+        let original = window.frame
+        if let visible = window.screen?.visibleFrame {
+            check("设置窗口在屏幕正中间", abs(window.frame.midX - visible.midX) <= 1 && abs(window.frame.midY - visible.midY) <= 1,
+                  "窗口中心 (\(window.frame.midX), \(window.frame.midY))，屏幕中心 (\(visible.midX), \(visible.midY))")
+        }
+        var frames: [String] = []
+        for tab in SettingsTab.allCases + [.general] {
+            SettingsWindowController.show(tab)
+            try? await Task.sleep(for: .milliseconds(450))
+            frames.append("\(tab.rawValue) \(window.frame)")
+            if window.frame != original { break }
+        }
+        check("设置窗口切换 5 个栏目时位置和大小不变（不跳动）", window.frame == original
+              && window.contentRect(forFrameRect: window.frame).size == SettingsWindowController.size, frames.joined(separator: "；"))
+        check("设置窗口有「截屏翻译」栏目", SettingsTab.allCases.contains(.translate) && window.title == "通用")
+
+        // Snap 的普通窗口（设置）和其他窗口一样能被截图、录屏、截屏翻译截到
+        check("设置窗口可以被截图截到", ScreenFreezer.capturableOwnWindows.contains(CGWindowID(window.windowNumber)))
+
+        // 从设置窗口打开权限设置：放在设置窗口正中间，跟着设置窗口移动；关闭设置窗口时一起关
+        OnboardingWindowController.show(over: window)
+        try? await Task.sleep(for: .milliseconds(800))
+        let child = OnboardingWindowController.debugWindow
+        check("从设置打开权限设置：在设置窗口正中间", child.map {
+            abs($0.frame.midX - window.frame.midX) <= 1 && abs($0.frame.midY - window.frame.midY) <= 1 && $0.frame.width > 300
+        } == true, "\(String(describing: child?.frame)) / \(window.frame)")
+        check("权限设置窗口跟着设置窗口移动", child?.parent === window)
+        check("权限设置窗口也可以被截到", child.map { ScreenFreezer.capturableOwnWindows.contains(CGWindowID($0.windowNumber)) } == true)
+        window.close()
+        try? await Task.sleep(for: .milliseconds(500))
+        check("关闭设置窗口时权限设置一起关闭", OnboardingWindowController.debugWindow == nil && child?.isVisible != true)
     }
 
     private static func hk(_ code: Int, _ modifiers: Int) -> Hotkey {
@@ -91,8 +130,8 @@ enum DebugFeatureTest {
         check("冲突检测：F13 可以单独使用", problem(hk(kVK_F13, 0)) == nil, problem(hk(kVK_F13, 0)) ?? "")
         let copy = problem(hk(kVK_ANSI_C, cmdKey)) ?? ""
         check("冲突检测：⌘C 是常用编辑快捷键", copy.contains("编辑快捷键"), copy)
-        let other = problem(hk(kVK_ANSI_2, optionKey), .screenshot) ?? ""
-        check("冲突检测：与录屏快捷键 ⌥2 相同", other.contains("录屏"), other)
+        let other = problem(hk(kVK_ANSI_S, optionKey), .screenshot) ?? ""
+        check("冲突检测：与录屏快捷键 ⌥S 相同", other.contains("录屏"), other)
         if HotkeyConflicts.systemShortcutName(for: hk(kVK_ANSI_3, cmdKey | shiftKey)) != nil {
             let system = problem(hk(kVK_ANSI_3, cmdKey | shiftKey)) ?? ""
             check("冲突检测：⇧⌘3 与系统「截取整个屏幕」冲突", system.contains("截取整个屏幕"), system)
@@ -113,7 +152,7 @@ enum DebugFeatureTest {
         // 冲突时保留原来的快捷键
         _ = coordinator.setHotkey(hk(kVK_ANSI_V, cmdKey), for: .screenshot)
         check("冲突时保留原来的快捷键", Preferences.shared.screenshotHotkey == custom)
-        check("恢复默认 ⌥1", coordinator.setHotkey(.defaultScreenshot, for: .screenshot) == nil
+        check("恢复默认 ⌥A", coordinator.setHotkey(.defaultScreenshot, for: .screenshot) == nil
               && Preferences.shared.screenshotHotkey == .defaultScreenshot)
         check("快捷键存储格式可还原", Hotkey(stored: custom.stored) == custom)
     }
@@ -207,7 +246,7 @@ enum DebugFeatureTest {
 
         // 8. 恢复默认
         model.record(.defaultScreenshot, for: .screenshot)
-        check("恢复默认 ⌥1", prefs.screenshotHotkey == .defaultScreenshot)
+        check("恢复默认 ⌥A", prefs.screenshotHotkey == .defaultScreenshot)
         window.close()
     }
 
@@ -263,7 +302,7 @@ enum DebugFeatureTest {
         guard let (session2, _) = await selectRegion() else { return check("打开录屏选区", false) }
         _ = session2.overlayKeyDown(key(kVK_Return))
         try? await Task.sleep(for: .milliseconds(300))
-        manager.debugCountdown?.keyDown(with: key(kVK_ANSI_2, .option, "™"))
+        manager.debugCountdown?.keyDown(with: key(kVK_ANSI_S, .option, "ß"))
         try? await Task.sleep(for: .milliseconds(300))
         check("倒计时中按录屏快捷键取消", manager.state == .idle)
 

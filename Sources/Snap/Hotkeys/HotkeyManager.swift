@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 /// 全局快捷键：用 Carbon 的 RegisterEventHotKey 注册。
-/// - 系统会直接把按键交给 Snap，不会再传给当前输入框，所以不会打出 ¡ ™ 之类的字符
+/// - 系统会直接把按键交给 Snap，不会再传给当前输入框，所以不会打出 å ß 之类的字符
 /// - Carbon 修饰键不区分左右，左右 Option 都能触发
 /// - 不需要「辅助功能」权限，空闲时不占 CPU
 @MainActor
@@ -12,6 +12,7 @@ final class HotkeyManager {
     enum Action: UInt32, CaseIterable {
         case screenshot = 1
         case recording = 2
+        case translate = 3
     }
 
     /// 快捷键「真正按下」时回调（按住不放产生的重复事件已被过滤）

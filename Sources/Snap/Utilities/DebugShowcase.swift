@@ -43,6 +43,9 @@ enum DebugShowcase {
         return DebugUITest.Synthetic(frozen: frozen, windows: [layout.chart, layout.note, layout.document].map { $0.offsetBy(dx: o.x, dy: o.y) })
     }
 
+    /// 合成的演示桌面图片（垫在 Snap 窗口后面截图用）
+    static func desktopImage(for screen: NSScreen) -> CGImage? { desktop(for: screen)?.0 }
+
     private static func desktop(for screen: NSScreen) -> (CGImage, Layout)? {
         if let cached = cachedDesktop, cached.origin == screen.frame.origin { return (cached.image, cached.layout) }
         let size = screen.frame.size
@@ -163,8 +166,8 @@ enum DebugShowcase {
         NSBezierPath(roundedRect: n, xRadius: 10, yRadius: 10).fill()
         NSGraphicsContext.restoreGraphicsState()
         text("便签", at: CGPoint(x: n.minX + 22, y: n.maxY - 44), size: 18, weight: .bold, color: hex(0x6B5410))
-        text("⌥1  截图", at: CGPoint(x: n.minX + 22, y: n.maxY - 92), size: 20, weight: .semibold, color: hex(0x5A4A1A))
-        text("⌥2  录屏", at: CGPoint(x: n.minX + 22, y: n.maxY - 130), size: 20, weight: .semibold, color: hex(0x5A4A1A))
+        text("⌥A  截图", at: CGPoint(x: n.minX + 22, y: n.maxY - 92), size: 20, weight: .semibold, color: hex(0x5A4A1A))
+        text("⌥S  录屏", at: CGPoint(x: n.minX + 22, y: n.maxY - 130), size: 20, weight: .semibold, color: hex(0x5A4A1A))
         line(n.minX + 22, n.minY + 30, 180, color: hex(0xEADB97))
 
         // 图表窗口（在最前）
@@ -262,7 +265,7 @@ enum DebugShowcase {
     }
 
     /// 单独截取一个 Snap 窗口（设置窗口）
-    private static func captureWindow(_ window: NSWindow, name: String, dir: URL) async {
+    static func captureWindow(_ window: NSWindow, name: String, dir: URL) async {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
               let target = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) else { return }
         let filter = SCContentFilter(desktopIndependentWindow: target)
@@ -276,7 +279,7 @@ enum DebugShowcase {
     }
 
     /// 垫在录屏界面、缩略图下面的演示桌面窗口（只给截图用，鼠标可以穿透）
-    private static func makeBackdrop(for screen: NSScreen, image: CGImage, level: NSWindow.Level) -> NSWindow {
+    static func makeBackdrop(for screen: NSScreen, image: CGImage, level: NSWindow.Level) -> NSWindow {
         let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.level = level
         window.isReleasedWhenClosed = false
@@ -289,6 +292,38 @@ enum DebugShowcase {
         window.contentView = view
         window.orderFrontRegardless()
         return window
+    }
+
+    // MARK: - 设置窗口实拍
+
+    /// 只拍设置窗口（用 ScreenCaptureKit 拍 Snap 自己的窗口，能看到真实的毛玻璃和模糊效果）。
+    /// 窗口后面垫一张合成的演示桌面，毛玻璃透出来的只有它，不会拍到真实屏幕内容。
+    /// 用法：open --env SNAP_SETTINGS_SHOTS=/输出目录 [--env SNAP_SETTINGS_DARK=1] build/Snap.app
+    static func runSettingsShotsIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["SNAP_SETTINGS_SHOTS"] else { return }
+        let dir = URL(fileURLWithPath: path, isDirectory: true)
+        let dark = ProcessInfo.processInfo.environment["SNAP_SETTINGS_DARK"] != nil
+        NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let screen = NSScreen.main, let (image, _) = desktop(for: screen) else { return }
+            let backdrop = makeBackdrop(for: screen, image: image, level: .normal)
+            for tab in SettingsTab.allCases {
+                SettingsWindowController.show(tab)
+                try? await Task.sleep(for: .milliseconds(800))
+                if let window = NSApp.windows.first(where: { $0.title == tab.title && $0.isVisible }) {
+                    await captureWindow(window, name: "settings-\(tab.rawValue)\(dark ? "-dark" : "").png", dir: dir)
+                }
+            }
+            // 权限设置（独立窗口时）
+            OnboardingWindowController.show()
+            try? await Task.sleep(for: .milliseconds(800))
+            if let window = OnboardingWindowController.debugWindow {
+                await captureWindow(window, name: "onboarding\(dark ? "-dark" : "").png", dir: dir)
+            }
+            backdrop.close()
+            NSApp.terminate(nil)
+        }
     }
 
     // MARK: - 拍摄
@@ -306,6 +341,7 @@ enum DebugShowcase {
             try? await Task.sleep(for: .seconds(1))
             await run(dir: dir)
             (prefs.recordSystemAudio, prefs.recordMicrophone, prefs.recordingShowsCursor) = saved
+            ToolStyleMemory.debugCleanUp()
             try? verifyLog.joined(separator: "\n").write(to: dir.appendingPathComponent("verify.txt"), atomically: true, encoding: .utf8)
             Log.capture.notice("界面截图拍摄完成")
             NSApp.terminate(nil)

@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 
 /// 快捷键冲突检测：设置新快捷键前依次检查
 /// 1. 必须带 ⌘ / ⌥ / ⌃ 之一（F1–F20 可以单独使用）
-/// 2. 不能与 Snap 的另一个快捷键相同
+/// 2. 不能与 Snap 的其他快捷键相同
 /// 3. 不能占用常用的编辑快捷键（⌘C、⌘V、⌘Z…），否则所有 App 里的这些快捷键都会失效
 /// 4. 不能与 macOS 已启用的系统快捷键相同（系统设置 › 键盘 › 键盘快捷键）
 /// 5. 系统必须允许注册（被其他程序独占时注册会失败）
@@ -22,9 +22,10 @@ enum HotkeyConflicts {
         if modifiers & strong == 0 && !hotkey.isFunctionKey {
             return "需要包含 ⌘、⌥ 或 ⌃ 之一（只有 F1–F20 可以单独使用）。"
         }
-        let other: HotkeyManager.Action = action == .screenshot ? .recording : .screenshot
-        if hotkey == CaptureCoordinator.shared.hotkey(for: other) {
-            return "\(hotkey.displayString) 已经是「\(other.title)」的快捷键。"
+        for other in HotkeyManager.Action.allCases where other != action {
+            if hotkey == CaptureCoordinator.shared.hotkey(for: other) {
+                return "\(hotkey.displayString) 已经是「\(other.title)」的快捷键。"
+            }
         }
         if reservedEditing.contains(hotkey) {
             return "\(hotkey.displayString) 是常用的编辑快捷键，设为全局快捷键后所有 App 里的 \(hotkey.displayString) 都会失效。"
@@ -109,5 +110,11 @@ enum HotkeyConflicts {
 }
 
 extension HotkeyManager.Action {
-    var title: String { self == .screenshot ? "截图" : "录屏" }
+    var title: String {
+        switch self {
+        case .screenshot: "截图"
+        case .recording: "录屏"
+        case .translate: "截屏翻译"
+        }
+    }
 }
