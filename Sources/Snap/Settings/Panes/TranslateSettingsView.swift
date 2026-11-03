@@ -52,18 +52,28 @@ struct TranslateSettingsView: View {
             }
 
             SettingsSection(title: "结果窗口",
-                            footer: "窗口里的快捷键：⌘C 复制译文、⇧⌘C 复制原文、⌘R 重新翻译、⌘P 钉住 / 取消钉住、Esc 关闭。") {
+                            footer: "窗口里的快捷键：⌘C 复制译文、⇧⌘C 复制原文、⌘R 重新翻译、⌘P 钉住 / 取消钉住、Esc 关闭。截屏翻译的快捷键在「快捷键」里设置。") {
+                SettingsRow(icon: "arrow.right.circle.fill", tint: .chipSky, title: "默认目标语言",
+                            caption: prefs.defaultTargetLanguage.isEmpty ? "自动：中文译成英文，其他语言译成简体中文"
+                                                                         : "原文就是这种语言时，中文译成英文、其他译成简体中文",
+                            isFirst: true) {
+                    Picker("", selection: $prefs.defaultTargetLanguage) {
+                        Text("自动").tag("")
+                        Divider()
+                        ForEach(Self.languages, id: \.self) { Text($0.displayName).tag($0.rawValue) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                SwitchRow(icon: "doc.on.clipboard.fill", tint: .chipHoney, title: "翻译完成后自动复制译文",
+                          caption: "复制到剪贴板，可以直接粘贴", isOn: $prefs.translateAutoCopy)
+                SettingsRow(icon: "speaker.wave.2.fill", tint: .chipSage, title: "朗读语速") {
+                    WarmSegmented(options: [(0.42, "慢"), (0.5, "正常"), (0.57, "快")], selection: $prefs.speechRate,
+                                  segmentWidth: 52)
+                }
                 SwitchRow(icon: "pin.fill", tint: .apricot, title: "默认钉住",
                           caption: "钉住的窗口置顶、点别处不会关闭，可以拖动、调整大小，也可以同时钉住多个对照着看。",
-                          isFirst: true, isOn: $prefs.translateWindowPinnedByDefault)
-            }
-
-            SettingsSection(title: "即将加入", footer: "截屏翻译的快捷键在「快捷键」里设置。") {
-                SettingsRow(icon: "sparkles", tint: .chipLavender, title: "查词、在线引擎、历史记录",
-                            caption: "默认目标语言、朗读语速、单词查词、可选的在线翻译引擎、翻译历史，会在后续版本陆续出现在这里。",
-                            isFirst: true) {
-                    EmptyView()
-                }
+                          isOn: $prefs.translateWindowPinnedByDefault)
             }
         }
     }

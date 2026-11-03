@@ -78,6 +78,7 @@ final class Preferences: ObservableObject {
         case screenshotHotkey, recordingHotkey, translateHotkey
         case ocrSmartLayout, ocrDetectsQRCodes, ocrPreferredLanguage, translateWindowPinnedByDefault
         case enabledEngines, defaultEngine, llmPrompt
+        case defaultTargetLanguage, translateAutoCopy, speechRate
     }
 
     // MARK: 通用
@@ -132,6 +133,12 @@ final class Preferences: ObservableObject {
     @Published var translateWindowPinnedByDefault: Bool { didSet { Self.save(translateWindowPinnedByDefault, .translateWindowPinnedByDefault) } }
     /// OCR 优先语言（TranslateLanguage 的 rawValue），空字符串表示跟随系统语言
     @Published var ocrPreferredLanguage: String { didSet { Self.save(ocrPreferredLanguage, .ocrPreferredLanguage) } }
+    /// 默认目标语言（TranslateLanguage 的 rawValue）；空字符串表示自动：中文 → 英文，其他 → 简体中文
+    @Published var defaultTargetLanguage: String { didSet { Self.save(defaultTargetLanguage, .defaultTargetLanguage) } }
+    /// 翻译完成后自动复制译文（默认关闭）
+    @Published var translateAutoCopy: Bool { didSet { Self.save(translateAutoCopy, .translateAutoCopy) } }
+    /// 朗读语速（AVSpeechUtterance.rate，系统默认 0.5）
+    @Published var speechRate: Double { didSet { Self.save(speechRate, .speechRate) } }
 
     // MARK: 快捷键（存成 [键码, 修饰键]）
     @Published var screenshotHotkey: Hotkey { didSet { Self.save(screenshotHotkey.stored, .screenshotHotkey) } }
@@ -180,6 +187,9 @@ final class Preferences: ObservableObject {
         enabledEngines = Self.load(.enabledEngines, [String]())
         defaultEngine = Self.load(.defaultEngine, "apple")
         llmPrompt = Self.load(.llmPrompt, "")
+        defaultTargetLanguage = Self.load(.defaultTargetLanguage, "")
+        translateAutoCopy = Self.load(.translateAutoCopy, false)
+        speechRate = Self.load(.speechRate, 0.5)
 
         screenshotHotkey = Hotkey(stored: Self.load(.screenshotHotkey, [Int]())) ?? .defaultScreenshot
         recordingHotkey = Hotkey(stored: Self.load(.recordingHotkey, [Int]())) ?? .defaultRecording

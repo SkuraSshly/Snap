@@ -37,7 +37,9 @@ final class TranslationModel: ObservableObject {
     @Published private(set) var translation = ""
     /// 译文正在逐段出来（已经显示的部分是新的，不是上一次的旧译文）
     @Published private(set) var isPartial = false
-    @Published private(set) var status = Status.idle
+    @Published private(set) var status = Status.idle {
+        didSet { if status == .done, oldValue != .done { didFinishTranslation() } }
+    }
     /// 交给 .translationTask 的配置；变化时界面开始翻译
     @Published var configuration: TranslationSession.Configuration?
 
@@ -67,9 +69,10 @@ final class TranslationModel: ObservableObject {
 
     /// 实际使用的原文语言
     var sourceLanguage: TranslateLanguage { sourceChoice ?? detected ?? .english }
-    /// 实际使用的目标语言（与原文相同时自动换成另一种）
+    /// 实际使用的目标语言：窗口里选的 > 设置里的默认目标语言 > 自动规则；与原文相同时自动换成另一种
     var targetLanguage: TranslateLanguage {
-        LanguageRules.resolvedTarget(targetChoice ?? LanguageRules.defaultTarget(for: sourceLanguage), source: sourceLanguage)
+        let preferred = targetChoice ?? TranslateLanguage(rawValue: Preferences.shared.defaultTargetLanguage)
+        return LanguageRules.resolvedTarget(preferred ?? LanguageRules.defaultTarget(for: sourceLanguage), source: sourceLanguage)
     }
 
     init(result: OCRResult, recognitionTime: Duration) {
@@ -190,11 +193,11 @@ final class TranslationModel: ObservableObject {
                 isPartial = false
                 guard text == sourceText, source == sourceLanguage, target == targetLanguage else { return }
                 translation = output
-                status = .done
                 if !failures.isEmpty {
                     engine = current
                     engineNotice = failures.joined(separator: "；") + "，已切换到 \(current.displayName)"
                 }
+                status = .done
                 Log.capture.notice("截屏翻译：\(current.displayName, privacy: .public) 翻译完成，耗时 \((ContinuousClock.now - started).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
             } catch is CancellationError {
             } catch {
@@ -313,6 +316,14 @@ final class TranslationModel: ObservableObject {
             status = .failed(Self.describe(error))
             Log.capture.error("截屏翻译：Apple 翻译失败 \(String(describing: error), privacy: .public)")
         }
+    }
+
+    /// 翻译完成：设置里打开了「自动复制译文」就复制
+    private func didFinishTranslation() {
+        guard !isPartial, !translation.isEmpty, Preferences.shared.translateAutoCopy else { return }
+        let pasteboard = TranslationWindow.pasteboard
+        pasteboard.clearContents()
+        pasteboard.setString(translation, forType: .string)
     }
 
     /// 正在准备或进行翻译（还没有结果）

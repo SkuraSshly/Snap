@@ -26,7 +26,7 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         guard !trimmed.isEmpty else { return }
         let utterance = AVSpeechUtterance(string: trimmed)
         utterance.voice = Self.bestVoice(for: language)
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.rate = Float(Preferences.shared.speechRate)
         speakingID = id
         synthesizer.speak(utterance)
     }
@@ -41,7 +41,7 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         let utterance = AVSpeechUtterance(string: text)
         let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == voiceLanguage }
         utterance.voice = voices.max { $0.quality.rawValue < $1.quality.rawValue } ?? AVSpeechSynthesisVoice(language: voiceLanguage)
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.rate = Float(Preferences.shared.speechRate)
         speakingID = id
         synthesizer.speak(utterance)
     }

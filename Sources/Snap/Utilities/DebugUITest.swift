@@ -729,6 +729,34 @@ enum DebugUITest {
 
         await runLLMChecks(check: check)
 
+        // 结果窗口的设置：默认目标语言、自动复制译文
+        let savedTarget = prefs.defaultTargetLanguage, savedAutoCopy = prefs.translateAutoCopy
+        prefs.enabledEngines = []
+        prefs.defaultEngine = "apple"
+        prefs.defaultTargetLanguage = "ja"
+        let english = TranslationModel(result: OCRResult(text: "Good morning", language: .english, confidence: 1, lines: []),
+                                       recognitionTime: .milliseconds(100))
+        let japanese = TranslationModel(result: OCRResult(text: "おはよう", language: .japanese, confidence: 1, lines: []),
+                                        recognitionTime: .milliseconds(100))
+        check("默认目标语言：设为日语后英文译成日语", english.targetLanguage == .japanese)
+        check("默认目标语言：原文就是日语时改译成简体中文", japanese.targetLanguage == .simplifiedChinese)
+        prefs.defaultTargetLanguage = ""
+        check("默认目标语言：自动时英文译成简体中文", english.targetLanguage == .simplifiedChinese)
+        prefs.translateAutoCopy = true
+        TranslationWindow.pasteboard.clearContents()
+        english.translate()
+        try? await Task.sleep(for: .milliseconds(300))
+        check("翻译完成后自动复制译文", TranslationWindow.pasteboard.string(forType: .string) == english.translation
+              && !english.translation.isEmpty, String(describing: TranslationWindow.pasteboard.string(forType: .string)))
+        prefs.translateAutoCopy = false
+        TranslationWindow.pasteboard.clearContents()
+        english.sourceText = "Good night"
+        english.translate()
+        try? await Task.sleep(for: .milliseconds(300))
+        check("关闭自动复制时不复制", TranslationWindow.pasteboard.string(forType: .string) == nil)
+        prefs.defaultTargetLanguage = savedTarget
+        prefs.translateAutoCopy = savedAutoCopy
+
         // 恢复
         prefs.enabledEngines = savedEnabled
         prefs.defaultEngine = savedDefault

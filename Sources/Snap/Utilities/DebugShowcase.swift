@@ -313,6 +313,15 @@ enum DebugShowcase {
                 try? await Task.sleep(for: .milliseconds(800))
                 if let window = NSApp.windows.first(where: { $0.title == tab.title && $0.isVisible }) {
                     await captureWindow(window, name: "settings-\(tab.rawValue)\(dark ? "-dark" : "").png", dir: dir)
+                    // 内容超过一屏的页面：再拍一张滚到底的
+                    if let scroll = Self.firstScrollView(in: window.contentView),
+                       let document = scroll.documentView, document.frame.height > scroll.contentView.bounds.height + 1 {
+                        let bottom = document.isFlipped ? document.frame.height - scroll.contentView.bounds.height : 0
+                        scroll.contentView.scroll(to: CGPoint(x: 0, y: bottom))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        try? await Task.sleep(for: .milliseconds(400))
+                        await captureWindow(window, name: "settings-\(tab.rawValue)-bottom\(dark ? "-dark" : "").png", dir: dir)
+                    }
                 }
             }
             // 权限设置（独立窗口时）
@@ -324,6 +333,13 @@ enum DebugShowcase {
             backdrop.close()
             NSApp.terminate(nil)
         }
+    }
+
+    private static func firstScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view else { return nil }
+        if let scroll = view as? NSScrollView { return scroll }
+        for subview in view.subviews { if let found = firstScrollView(in: subview) { return found } }
+        return nil
     }
 
     // MARK: - 拍摄
