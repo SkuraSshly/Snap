@@ -46,6 +46,9 @@ struct TranslateSettingsView: View {
                 ForEach(EngineID.allCases.filter { $0 != .apple }) { engine in
                     EngineRow(engine: engine, model: engines)
                 }
+                if EngineID.allCases.contains(where: { $0.isLLM && engines.isEnabled($0) }) {
+                    LLMPromptRow(prompt: $prefs.llmPrompt)
+                }
             }
 
             SettingsSection(title: "结果窗口",
@@ -132,6 +135,8 @@ private struct EngineRow: View {
         case .azure: .chipLavender
         case .baidu: .chipHoney
         case .tencent: .chipSage
+        case .openAI: .chipCocoa
+        case .claude: .apricot
         default: .chipCocoa
         }
     }
@@ -139,7 +144,7 @@ private struct EngineRow: View {
     var body: some View {
         let enabled = model.isEnabled(engine)
         VStack(alignment: .leading, spacing: 0) {
-            SettingsRow(icon: "globe.asia.australia.fill", tint: tint, title: engine.displayName,
+            SettingsRow(icon: engine.isLLM ? "sparkles" : "globe.asia.australia.fill", tint: tint, title: engine.displayName,
                         caption: enabled ? (engine.hasCredentials ? "已启用" : "已启用 · 还没有填写 Key") : "未启用") {
                 Toggle("", isOn: Binding(get: { enabled }, set: { model.setEnabled(engine, $0) }))
                     .toggleStyle(WarmSwitchStyle())
@@ -188,5 +193,30 @@ private struct EngineRow: View {
                 .padding(.bottom, 12)
             }
         }
+    }
+}
+
+/// 大模型翻译的提示词：留空用默认的；{source}、{target} 会换成原文语言、目标语言
+private struct LLMPromptRow: View {
+    @Binding var prompt: String
+
+    var body: some View {
+        SettingsRow(icon: "text.quote", tint: .chipLavender, title: "大模型提示词",
+                    caption: "只对大模型引擎生效。{source} 和 {target} 会换成原文语言和目标语言。") {
+            if !prompt.isEmpty {
+                Button("恢复默认") { prompt = "" }
+                    .buttonStyle(WarmButtonStyle())
+            }
+        }
+        TextEditor(text: Binding(get: { prompt.isEmpty ? LLMTranslation.defaultPrompt : prompt },
+                                 set: { prompt = $0 == LLMTranslation.defaultPrompt ? "" : $0 }))
+            .font(.system(size: 12))
+            .foregroundStyle(Color.warmInk)
+            .scrollContentBackground(.hidden)
+            .frame(height: 96)
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.warmTrack.opacity(0.6)))
+            .padding(.horizontal, 13)
+            .padding(.bottom, 12)
     }
 }

@@ -4,7 +4,7 @@ import SnapOCRKit
 /// 翻译引擎。Apple 翻译离线、免费、默认可用；其余是可选的在线引擎，全部使用官方开放平台 API，
 /// 需要在设置里填写自己的 Key 才能启用（默认全部关闭）。
 enum EngineID: String, CaseIterable, Identifiable, Sendable {
-    case apple, youdao, deepl, azure, baidu, tencent, volcengine
+    case apple, youdao, deepl, azure, baidu, tencent, volcengine, openAI, claude
 
     var id: Self { self }
 
@@ -17,8 +17,13 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
         case .baidu: "百度翻译"
         case .tencent: "腾讯翻译君"
         case .volcengine: "火山翻译"
+        case .openAI: "大模型（OpenAI 兼容）"
+        case .claude: "Claude"
         }
     }
+
+    /// 大语言模型翻译（流式输出、可自定义提示词）
+    var isLLM: Bool { self == .openAI || self == .claude }
 
     /// 需要填写的字段（存在钥匙串里）
     struct Field: Sendable {
@@ -43,6 +48,11 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
                         .init(key: "region", label: "地域", placeholder: "默认 ap-guangzhou", secret: false)]
         case .volcengine: [.init(key: "accessKeyId", label: "Access Key ID", placeholder: "AKLT…", secret: false),
                            .init(key: "secretAccessKey", label: "Secret Access Key", placeholder: "Secret Access Key", secret: true)]
+        case .openAI: [.init(key: "baseURL", label: "Base URL", placeholder: "例如 https://api.deepseek.com/v1", secret: false),
+                       .init(key: "model", label: "模型", placeholder: "例如 deepseek-chat、qwen-plus、moonshot-v1-8k", secret: false),
+                       .init(key: "apiKey", label: "API Key", placeholder: "sk-…", secret: true)]
+        case .claude: [.init(key: "apiKey", label: "API Key", placeholder: "sk-ant-…", secret: true),
+                       .init(key: "model", label: "模型", placeholder: "默认 \(ClaudeAPI.defaultModel)", secret: false)]
         }
     }
 
@@ -56,6 +66,8 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
         case .baidu: URL(string: "https://fanyi-api.baidu.com/manage/developer")
         case .tencent: URL(string: "https://console.cloud.tencent.com/cam/capi")
         case .volcengine: URL(string: "https://console.volcengine.com/iam/keymanage/")
+        case .openAI: nil
+        case .claude: URL(string: "https://platform.claude.com/settings/keys")
         }
     }
 
@@ -66,13 +78,15 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
     func credential(_ key: String) -> String { EngineKeychain.get("\(rawValue).\(key)") }
     func setCredential(_ value: String, for key: String) { EngineKeychain.set(value, for: "\(rawValue).\(key)") }
 
-    /// 必填字段都填了（区域、地域可以不填）
+    /// 必填字段都填了（区域、地域、Claude 的模型可以不填）
     var hasCredentials: Bool {
-        fields.filter { $0.key != "region" }.allSatisfy { !credential($0.key).isEmpty }
+        fields.filter { !($0.key == "region" || (self == .claude && $0.key == "model")) }
+            .allSatisfy { !credential($0.key).isEmpty }
     }
 
-    /// 在线翻译；source 为 nil 时让服务自动检测
-    func translate(_ text: String, from source: TranslateLanguage?, to target: TranslateLanguage) async throws -> String {
+    /// 在线翻译；source 为 nil 时让服务自动检测。大模型引擎一边生成一边通过 onPartial 回报（其他引擎一次返回）
+    func translate(_ text: String, from source: TranslateLanguage?, to target: TranslateLanguage,
+                   onPartial: @escaping @MainActor (String) -> Void = { _ in }) async throws -> String {
         guard self != .apple else { throw EngineError.service("Apple 翻译不走这里") }
         #if DEBUG
         // 自测：用假的在线引擎，不发网络请求
@@ -88,6 +102,11 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
                                                    secretKey: credential("secretKey"), region: credential("region"))
         case .volcengine: try await Volcengine.translate(text, source, target, accessKey: credential("accessKeyId"),
                                                          secretKey: credential("secretAccessKey"))
+        case .openAI: try await OpenAICompatible.translate(text, source, target, baseURL: credential("baseURL"),
+                                                           model: credential("model"), apiKey: credential("apiKey"),
+                                                           prompt: await Preferences.shared.llmPrompt, onPartial: onPartial)
+        case .claude: try await ClaudeAPI.translate(text, source, target, apiKey: credential("apiKey"), model: credential("model"),
+                                                    prompt: await Preferences.shared.llmPrompt, onPartial: onPartial)
         case .apple: ""
         }
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)

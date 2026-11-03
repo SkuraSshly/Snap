@@ -727,11 +727,71 @@ enum DebugUITest {
               && model.engineNotice == nil)
         EngineID.debugOnline = nil
 
+        await runLLMChecks(check: check)
+
         // 恢复
         prefs.enabledEngines = savedEnabled
         prefs.defaultEngine = savedDefault
         for (key, value) in saved { EngineID.youdao.setCredential(value, for: key) }
         check("自测写入的 Key 已从钥匙串删除", EngineID.youdao.credential("appKey") == saved.first { $0.0 == "appKey" }?.1)
+    }
+
+    /// 大模型翻译：提示词、Base URL、流式解析、请求头（用假的服务端，不联网）
+    private static func runLLMChecks(check: Checks) async {
+        let prompt = LLMTranslation.systemPrompt(source: .english, target: .simplifiedChinese, custom: "")
+        check("大模型默认提示词：只输出译文、填入语言", prompt.contains("从英语翻译成简体中文") && prompt.contains("只输出译文"))
+        check("自定义提示词替换 {source} {target}",
+              LLMTranslation.systemPrompt(source: .japanese, target: .english, custom: "把{source}译成{target}") == "把日语译成英语")
+        check("Base URL 自动补全 /chat/completions",
+              OpenAICompatible.endpoint("https://api.deepseek.com/v1/")?.absoluteString == "https://api.deepseek.com/v1/chat/completions"
+              && OpenAICompatible.endpoint("https://x.test/v1/chat/completions")?.absoluteString == "https://x.test/v1/chat/completions"
+              && OpenAICompatible.endpoint("ftp://x") == nil)
+
+        LLMTranslation.debugProtocol = MockLLMServer.self
+        var partials: [String] = []
+        let claude = try? await ClaudeAPI.translate("Hello, world.", .english, .simplifiedChinese, apiKey: "sk-test",
+                                                    model: "", prompt: "") { partials.append($0) }
+        try? await Task.sleep(for: .milliseconds(100))
+        let claudeRequest = MockLLMServer.lastRequest
+        check("Claude：流式输出拼成完整译文", claude == "你好，世界。", String(describing: claude))
+        check("Claude：译文一边生成一边显示", partials.count >= 2 && partials.first == "你好", "\(partials)")
+        let body = claudeRequest.flatMap { $0.body }.flatMap { EngineHTTP.json($0) }
+        check("Claude 请求：版本头、默认模型、低强度、拒答回退",
+              claudeRequest?.headers["x-api-key"] == "sk-test" && claudeRequest?.headers["anthropic-version"] == "2026-10-21"
+              && claudeRequest?.headers["anthropic-beta"] == "server-side-fallback-2026-07-01"
+              && body?["model"] as? String == "claude-opus-5-5" && body?["fallbacks"] as? String == "default"
+              && (body?["output_config"] as? [String: Any])?["effort"] as? String == "low" && body?["stream"] as? Bool == true
+              && body?["temperature"] == nil, String(describing: body))
+        let haiku = try? await ClaudeAPI.translate("Hello", .english, .simplifiedChinese, apiKey: "sk-test",
+                                                   model: "claude-haiku-5-5", prompt: "") { _ in }
+        let haikuBody = MockLLMServer.lastRequest?.body.flatMap { EngineHTTP.json($0) }
+        check("不支持拒答回退的模型不带 fallbacks", haiku != nil && haikuBody?["fallbacks"] == nil
+              && MockLLMServer.lastRequest?.headers["anthropic-beta"] == nil)
+
+        partials = []
+        let openAI = try? await OpenAICompatible.translate("Hello, world.", .english, .simplifiedChinese,
+                                                          baseURL: "https://llm.test/v1", model: "test-model", apiKey: "sk-o",
+                                                          prompt: "") { partials.append($0) }
+        try? await Task.sleep(for: .milliseconds(100))
+        let openAIBody = MockLLMServer.lastRequest?.body.flatMap { EngineHTTP.json($0) }
+        check("OpenAI 兼容：流式拼接、[DONE] 结束", openAI == "你好，世界。" && partials.count >= 2, String(describing: openAI))
+        check("OpenAI 兼容请求：Bearer、模型、系统提示词", MockLLMServer.lastRequest?.headers["Authorization"] == "Bearer sk-o"
+              && openAIBody?["model"] as? String == "test-model"
+              && ((openAIBody?["messages"] as? [[String: Any]])?.first?["content"] as? String)?.contains("只输出译文") == true)
+
+        do {
+            _ = try await ClaudeAPI.translate("Hello", .english, .simplifiedChinese, apiKey: "bad", model: "", prompt: "") { _ in }
+            check("Key 无效时给出简短原因", false)
+        } catch {
+            check("Key 无效时给出简短原因", (error as? EngineError) == .invalidKey, "\(error)")
+        }
+        do {
+            _ = try await OpenAICompatible.translate("Hello", .english, .simplifiedChinese, baseURL: "https://quota.test",
+                                                     model: "m", apiKey: "k", prompt: "") { _ in }
+            check("额度用完（429 insufficient_quota）", false)
+        } catch {
+            check("额度用完（429 insufficient_quota）", (error as? EngineError) == .quotaExceeded, "\(error)")
+        }
     }
 
     /// 识别服务进程（SnapOCR.xpc）是否在运行
@@ -1644,5 +1704,62 @@ enum DebugRecordingTest {
             try? FileManager.default.removeItem(at: url)
         }
     }
+}
+
+/// 自测用的假大模型服务端：按 Claude / OpenAI 的流式格式分几段返回「你好，世界。」
+final class MockLLMServer: URLProtocol, @unchecked Sendable {
+    struct Captured { let headers: [String: String]; let body: Data? }
+    nonisolated(unsafe) static var lastRequest: Captured?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open()
+            var data = Data()
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+            while stream.hasBytesAvailable { let n = stream.read(buffer, maxLength: 4096); if n <= 0 { break }; data.append(buffer, count: n) }
+            buffer.deallocate()
+            stream.close()
+            body = data
+        }
+        Self.lastRequest = Captured(headers: request.allHTTPHeaderFields ?? [:], body: body)
+        let url = request.url!
+        let isClaude = url.host == "api.anthropic.com"
+        if request.value(forHTTPHeaderField: "x-api-key") == "bad" {
+            return respond(401, [#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#])
+        }
+        if url.host == "quota.test" {
+            return respond(429, [#"{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}"#])
+        }
+        let chunks: [String] = isClaude ? [
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"，世界。\"}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ] : [
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"，世界。\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ]
+        respond(200, chunks, contentType: "text/event-stream")
+    }
+
+    private func respond(_ status: Int, _ chunks: [String], contentType: String = "application/json") {
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": contentType])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        for chunk in chunks {
+            client?.urlProtocol(self, didLoad: Data(chunk.utf8))
+            Thread.sleep(forTimeInterval: 0.02)   // 模拟一段一段地来
+        }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 #endif

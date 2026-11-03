@@ -180,7 +180,14 @@ final class TranslationModel: ObservableObject {
         Task { @MainActor in
             let started = ContinuousClock.now
             do {
-                let output = try await current.translate(text, from: source, to: target)
+                // 大模型：译文一边生成一边显示
+                let output = try await current.translate(text, from: source, to: target) { [weak self] partial in
+                    guard let self, text == self.sourceText, source == self.sourceLanguage, target == self.targetLanguage,
+                          self.status == .translating else { return }
+                    self.translation = partial
+                    self.isPartial = true
+                }
+                isPartial = false
                 guard text == sourceText, source == sourceLanguage, target == targetLanguage else { return }
                 translation = output
                 status = .done
