@@ -981,10 +981,11 @@ enum DebugUITest {
         session.overlayMouseDown(at: g(121, 145))
         session.overlayMouseUp(at: g(121, 145))
         check("选着工具时单击方框边框：选中它（不画新的）", annotator.selectedID == firstID && document.annotations.count == 12)
-        session.overlayMouseDown(at: g(121, 145))
-        session.overlayMouseDragged(to: g(126, 145))
-        session.overlayMouseDragged(to: g(131, 145))
-        session.overlayMouseUp(at: g(131, 145))
+        // 按在边框上、避开边中点的控制点（那里是调整大小）
+        session.overlayMouseDown(at: g(121, 135))
+        session.overlayMouseDragged(to: g(126, 135))
+        session.overlayMouseDragged(to: g(131, 135))
+        session.overlayMouseUp(at: g(131, 135))
         check("选着工具时拖动已选中的标注：移动它", rectOfFirst() == originalRect?.offsetBy(dx: 10, dy: 0)
               && document.annotations.count == 12, "\(String(describing: rectOfFirst()))")
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
@@ -1023,6 +1024,52 @@ enum DebugUITest {
               && document.annotations.count == 12)
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
         session.debugSelectTool(nil)
+
+        // 控制点：选中后拖控制点调整大小（可撤销），拖太小时停住；Shift 等比、端点 45°（直接测几何）
+        if let r0 = originalRect {
+            session.overlayMouseDown(at: g(r0.minX + 1, r0.midY))
+            session.overlayMouseUp(at: g(r0.minX + 1, r0.midY))
+            check("选中矩形：8 个控制点", annotator.selectedID == firstID && annotator.selectedAnnotation?.resizeHandles.count == 8)
+            let corner = CGPoint(x: r0.maxX, y: r0.maxY)
+            check("右上角控制点上：调整大小的光标", annotator.resizeHandle(at: CGPoint(x: corner.x + 3, y: corner.y - 2)) == .frame(.topRight)
+                  && session.overlayCursor(at: g(corner.x, corner.y)) != .arrow
+                  && session.overlayCursor(at: g(corner.x, corner.y)) != .crosshair)
+            session.overlayMouseDown(at: g(corner.x, corner.y))
+            session.overlayMouseDragged(to: g(corner.x + 10, corner.y + 5))
+            session.overlayMouseDragged(to: g(corner.x + 20, corner.y + 10))
+            session.overlayMouseUp(at: g(corner.x + 20, corner.y + 10))
+            check("拖右上角：变大 (20, 10)，左下角不动",
+                  rectOfFirst() == CGRect(x: r0.minX, y: r0.minY, width: r0.width + 20, height: r0.height + 10),
+                  "\(String(describing: rectOfFirst()))")
+            render("10e-拖控制点调整大小")
+            session.overlayMouseDown(at: g(r0.minX, r0.midY))
+            session.overlayMouseDragged(to: g(r0.minX + 30, r0.midY))
+            session.overlayMouseUp(at: g(r0.minX + 30, r0.midY))
+            check("拖左边中点：只改宽度", rectOfFirst() == CGRect(x: r0.minX + 30, y: r0.minY, width: r0.width - 10, height: r0.height + 10),
+                  "\(String(describing: rectOfFirst()))")
+            let beforeTiny = rectOfFirst()
+            let bottomRight = CGPoint(x: r0.maxX + 20, y: r0.minY)
+            session.overlayMouseDown(at: g(bottomRight.x, bottomRight.y))
+            session.overlayMouseDragged(to: g(r0.minX + 31, r0.minY + 1))
+            session.overlayMouseUp(at: g(r0.minX + 31, r0.minY + 1))
+            check("拖得太小时停在上一个大小（也不记撤销点）", rectOfFirst() == beforeTiny,
+                  "\(String(describing: rectOfFirst())) 之前 \(String(describing: beforeTiny))")
+            _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+            _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+            check("调整大小可以撤销，恢复原样（仍保持选中）", rectOfFirst() == r0 && document.annotations.count == 12
+                  && annotator.selectedID == firstID, "\(String(describing: rectOfFirst()))")
+        }
+        let square = Annotation(shape: .ellipse(CGRect(x: 0, y: 0, width: 40, height: 20)), color: .red, size: .medium, opacity: 1)
+        if case .ellipse(let r) = square.resized(.frame(.topRight), to: CGPoint(x: 100, y: 25), keepRatio: true).shape {
+            check("Shift 拖角：保持宽高比", r == CGRect(x: 0, y: 0, width: 100, height: 50), "\(r)")
+        }
+        let line = Annotation(shape: .line(from: .zero, to: CGPoint(x: 50, y: 0)), color: .red, size: .medium, opacity: 1)
+        check("直线和箭头：两个端点控制点", line.resizeHandles.count == 2)
+        if case .line(let a, let b) = line.resized(.end, to: CGPoint(x: 40, y: 38), keepRatio: true).shape {
+            check("拖端点：起点不动；Shift 沿 45°", a == .zero && abs(b.x - b.y) < 0.001 && b.x > 30, "\(b)")
+        }
+        let scribble = Annotation(shape: .pen([.zero, CGPoint(x: 10, y: 10)]), color: .red, size: .medium, opacity: 1)
+        check("画笔没有控制点（只能移动）", scribble.resizeHandles.isEmpty)
 
         // 不透明度：没选工具时选中标注也显示属性栏；拖滑块改选中的标注，连续拖动合并成一次撤销
         let originalColor = document.annotation(withID: firstID)?.color ?? .clear
@@ -1291,6 +1338,17 @@ enum DebugUITest {
         let text = lines.joined(separator: "\n")
         try? text.write(to: dir.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
         Log.capture.notice("界面自测完成：\(lines.filter { $0.hasPrefix("✓") }.count)/\(lines.count) 通过")
+        quitAfterTest()
+    }
+
+    /// 自测结束后退出这份调试版，菜单栏里不留下多余的 Snap 图标。
+    /// 要留着检查（例如看内存）时加 --env SNAP_TEST_KEEP_RUNNING=1
+    static func quitAfterTest() {
+        guard ProcessInfo.processInfo.environment["SNAP_TEST_KEEP_RUNNING"] == nil else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            NSApp.terminate(nil)
+        }
     }
 }
 #endif
@@ -1326,6 +1384,7 @@ enum DebugRecordingTest {
             await run(check: check)
             try? check.lines.joined(separator: "\n").write(to: dir.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
             Log.capture.notice("录屏自测完成：\(check.lines.filter { $0.hasPrefix("✓") }.count)/\(check.lines.count) 通过")
+            DebugUITest.quitAfterTest()
         }
     }
 

@@ -47,6 +47,8 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
 
     /// 允许画标注的范围（截图界面里是选区，全屏模式是整块屏幕）
     var canvasBounds: CGRect = .zero
+    /// 屏幕上 1 点对应多少画布单位（重新编辑窗口把大图缩小显示时大于 1）：控制点的大小和点中范围按屏幕计算
+    var canvasUnitsPerPoint: CGFloat = 1
 
     private var inProgress: Annotation?
     private var dragStart: CGPoint?
@@ -54,6 +56,8 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     private(set) var selectedID: UUID?
     /// 正在拖动的标注：起点、拖动前的样子、是否已记撤销点
     private var moving: (start: CGPoint, original: Annotation, recordedUndo: Bool)?
+    /// 正在拖选中标注的控制点调整大小：哪个控制点、拖动前的样子、是否已记撤销点
+    private var resizing: (handle: Annotation.ResizeHandle, original: Annotation, recordedUndo: Bool)?
     /// 选着绘图工具时按在了某个标注上：如果只是单击（没画出东西），松开时选中它
     private var clickedAnnotation: Annotation?
     private var textView: NSTextView?
@@ -76,17 +80,51 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         if let inProgress {
             renderer.draw(inProgress, in: ctx)
         }
-        // 选中框：只画在屏幕上，不进入输出的图片
+        // 选中框和控制点：只画在屏幕上，不进入输出的图片
         if let selectedID, let selected = document.annotation(withID: selectedID) {
-            let frame = selected.bounds.insetBy(dx: -4, dy: -4)
-            ctx.saveGState()
-            ctx.setLineWidth(1.5)
+            drawSelection(of: selected, in: ctx)
+        }
+    }
+
+    /// 选中的标注：
+    /// - 矩形、椭圆：控制点直接画在形状的框上（不另画虚线框）
+    /// - 马赛克、模糊：本身没有边线，画一圈细线框再加控制点
+    /// - 直线、箭头：两个端点上各一个控制点
+    /// - 画笔、荧光笔、文字、序号：虚线框（只能移动）
+    private func drawSelection(of selected: Annotation, in ctx: CGContext) {
+        let u = canvasUnitsPerPoint
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        let handles = selected.resizeHandles
+        switch selected.shape {
+        case .mosaic(let rect), .blur(let rect):
+            ctx.setLineWidth(1 * u)
+            ctx.setStrokeColor(OverlayAccent.screenshot.cgColor)
+            ctx.stroke(rect)
+        case _ where handles.isEmpty:
+            let frame = selected.bounds.insetBy(dx: -4 * u, dy: -4 * u)
+            ctx.setLineWidth(1.5 * u)
             ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.9).cgColor)
             ctx.stroke(frame)
             ctx.setStrokeColor(OverlayAccent.screenshot.cgColor)
-            ctx.setLineDash(phase: 0, lengths: [5, 3])
+            ctx.setLineDash(phase: 0, lengths: [5 * u, 3 * u])
             ctx.stroke(frame)
-            ctx.restoreGState()
+            return
+        default:
+            break
+        }
+        // 控制点：白色圆点 + 蓝色描边，和截图选区的控制点一样
+        let d = 8 * u
+        ctx.setLineWidth(1.5 * u)
+        ctx.setFillColor(NSColor.white.cgColor)
+        ctx.setStrokeColor(OverlayAccent.screenshot.cgColor)
+        ctx.setShadow(offset: CGSize(width: 0, height: -0.5 * u), blur: 2 * u, color: NSColor.black.withAlphaComponent(0.3).cgColor)
+        for (_, point) in handles {
+            ctx.fillEllipse(in: CGRect(x: point.x - d / 2, y: point.y - d / 2, width: d, height: d))
+        }
+        ctx.setShadow(offset: .zero, blur: 0)
+        for (_, point) in handles {
+            ctx.strokeEllipse(in: CGRect(x: point.x - d / 2, y: point.y - d / 2, width: d, height: d))
         }
     }
 
@@ -128,6 +166,42 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     func grabbableAnnotation(at point: CGPoint) -> Annotation? {
         if let selected = selectedAnnotation, selected.bounds.insetBy(dx: -4, dy: -4).contains(point) { return selected }
         return annotation(at: point)
+    }
+
+    /// 鼠标下面的、选中标注的控制点（按屏幕上 7 点的范围判断）
+    func resizeHandle(at point: CGPoint) -> Annotation.ResizeHandle? {
+        guard let selected = selectedAnnotation else { return nil }
+        let radius = 7 * canvasUnitsPerPoint
+        return selected.resizeHandles
+            .map { ($0.handle, hypot(point.x - $0.point.x, point.y - $0.point.y)) }
+            .filter { $0.1 <= radius }
+            .min { $0.1 < $1.1 }?.0
+    }
+
+    /// 控制点上（或正在拖控制点）时的光标：调整大小的双向箭头；不在控制点上时为 nil
+    func resizeCursor(at point: CGPoint) -> NSCursor? {
+        let current = resizing.map { ($0.handle, $0.original) } ?? resizeHandle(at: point).flatMap { handle in
+            selectedAnnotation.map { (handle, $0) }
+        }
+        guard let (handle, annotation) = current else { return nil }
+        switch (handle, annotation.shape) {
+        case (.frame(let h), _):
+            return h.cursor
+        case (.start, .arrow(let a, let b)), (.start, .line(let a, let b)):
+            return Self.cursor(pointing: a, from: b)
+        case (.end, .arrow(let a, let b)), (.end, .line(let a, let b)):
+            return Self.cursor(pointing: b, from: a)
+        default:
+            return nil
+        }
+    }
+
+    /// 端点的光标：按端点相对另一端的方向，取最接近的那种调整大小箭头
+    private static func cursor(pointing p: CGPoint, from other: CGPoint) -> NSCursor {
+        let angle = atan2(p.y - other.y, p.x - other.x)
+        let octant = Int(((angle / (.pi / 4)).rounded() + 8)) % 8
+        let positions: [NSCursor.FrameResizePosition] = [.right, .topRight, .top, .topLeft, .left, .bottomLeft, .bottom, .bottomRight]
+        return NSCursor.frameResize(position: positions[octant], directions: .all)
     }
 
     var hasSelection: Bool { selectedID != nil }
@@ -172,7 +246,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         redraw()
         onChange?()
     }
-    var isMovingAnnotation: Bool { moving != nil }
+    var isMovingAnnotation: Bool { moving != nil || resizing != nil }
 
     /// 取消选中；原来有选中的返回 true
     @discardableResult
@@ -234,6 +308,11 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         // - 没选绘图工具时，按住任何标注都可以直接拖
         // - 选着绘图工具时，按住拖动是画新的标注；要移动，先单击选中，再拖已选中的那个
         // - 已选中的标注：虚线框内任何位置都可以拖
+        // 选中标注的控制点：调整大小（控制点可能在虚线框外面一点，先判断它）
+        if let handle = resizeHandle(at: point), let selected = selectedAnnotation {
+            resizing = (handle, selected, false)
+            return true
+        }
         let hit = annotation(at: point)
         if let selected = selectedAnnotation, selected.bounds.insetBy(dx: -4, dy: -4).contains(point) {
             moving = (point, selected, false)
@@ -280,6 +359,21 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     }
 
     func mouseDragged(to point: CGPoint, shift: Bool) {
+        if var resizing {
+            let changed = resizing.original.resized(resizing.handle, to: point.clamped(to: canvasBounds), keepRatio: shift)
+            // 拖得太小（看不见、点不中）时停在上一个大小
+            guard isMeaningful(changed) else { return }
+            if !resizing.recordedUndo {
+                document.recordUndo()
+                lastStyleEdit = nil
+                resizing.recordedUndo = true
+                self.resizing = resizing
+            }
+            document.replace(changed)
+            renderer.clearPatch(for: changed.id)
+            redraw()
+            return
+        }
         if var moving {
             let offset = clampedOffset(CGVector(dx: point.x - moving.start.x, dy: point.y - moving.start.y), for: moving.original)
             // 真的动了才记撤销点（单击选中不算一次修改）
@@ -310,6 +404,11 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     }
 
     func mouseUp(at point: CGPoint, shift: Bool) {
+        if resizing != nil {
+            resizing = nil
+            onChange?()
+            return
+        }
         if moving != nil {
             moving = nil
             onChange?()

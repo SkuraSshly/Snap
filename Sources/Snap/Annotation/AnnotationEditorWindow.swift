@@ -39,6 +39,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
                              height: visible.height * 0.9 - toolbarArea - Self.padding * 2 - 28)
         let zoom = min(1, maxSize.width / imageSize.width, maxSize.height / imageSize.height)
         let displaySize = CGSize(width: (imageSize.width * zoom).rounded(), height: (imageSize.height * zoom).rounded())
+        annotator.canvasUnitsPerPoint = 1 / zoom   // 缩小显示时，控制点在屏幕上仍是同样大小
 
         canvas = EditorCanvasView(image: image, imageSize: imageSize, displaySize: displaySize, scale: capture.scale)
         let contentSize = CGSize(width: max(displaySize.width + Self.padding * 2, 560),
@@ -209,9 +210,10 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// 鼠标所在位置的光标：正好在已有标注上（或正在拖动）时是系统标准指针
+    /// 鼠标所在位置的光标：选中标注的控制点上是调整大小的箭头；正好在已有标注上（或正在拖动）时是系统标准指针
     func canvasCursor(at point: CGPoint) -> NSCursor {
         if toolbar.isShowingColorPicker { return .arrow }
+        if let cursor = annotator.resizeCursor(at: point) { return cursor }
         if annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: point) != nil { return .arrow }
         return canvasCursor
     }

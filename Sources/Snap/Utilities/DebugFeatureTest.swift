@@ -51,6 +51,7 @@ enum DebugFeatureTest {
 
             try? check.lines.joined(separator: "\n").write(to: dir.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
             Log.capture.notice("功能自测完成：\(check.lines.filter { $0.hasPrefix("✓") }.count)/\(check.lines.count) 通过")
+            DebugUITest.quitAfterTest()
         }
     }
 

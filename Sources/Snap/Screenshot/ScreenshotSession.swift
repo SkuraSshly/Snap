@@ -649,6 +649,8 @@ final class ScreenshotSession: OverlayEventHandler {
         }
         // 调色盘开着时是箭头（点调色盘外面只是关掉它）
         if toolbar.isShowingColorPicker { return .arrow }
+        // 选中标注的控制点上（或正在拖控制点）：调整大小的箭头
+        if let annotator, let p = canvasPoint(point), let cursor = annotator.resizeCursor(at: p) { return cursor }
         // 鼠标正好在已有的标注上、在选中标注的虚线框内（或正在拖动标注）：系统标准指针，表示可以选中、拖动
         if let annotator, let p = canvasPoint(point),
            annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: p) != nil {
