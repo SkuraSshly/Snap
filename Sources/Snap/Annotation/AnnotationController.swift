@@ -45,8 +45,9 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     /// 状态变化（撤销可用性、工具等）时通知界面刷新
     var onChange: (() -> Void)?
 
-    /// 允许画标注的范围（截图界面里是选区，全屏模式是整块屏幕）
-    var canvasBounds: CGRect = .zero
+    /// 允许画标注的范围（截图界面里是选区，全屏模式是整块屏幕）。标注只显示、只能点中这里面的部分，
+    /// 和输出的图片一致；选区缩小后露在外面的部分看不见，再放大选区就又出现了（标注本身不会被删改）
+    var canvasBounds: CGRect = .zero { didSet { if canvasBounds != oldValue { redraw() } } }
     /// 屏幕上 1 点对应多少画布单位（重新编辑窗口把大图缩小显示时大于 1）：控制点的大小和点中范围按屏幕计算
     var canvasUnitsPerPoint: CGFloat = 1
 
@@ -74,11 +75,14 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     // MARK: - 绘制
 
     func render(in ctx: CGContext) {
+        ctx.saveGState()
+        if !canvasBounds.isEmpty { ctx.clip(to: canvasBounds) }
         renderer.draw(document.annotations, in: ctx)
         if let inProgress {
             renderer.draw(inProgress, in: ctx)
         }
-        // 选中框和控制点：只画在屏幕上，不进入输出的图片
+        ctx.restoreGState()
+        // 控制点：只画在屏幕上，不进入输出的图片
         if let selectedID, let selected = document.annotation(withID: selectedID) {
             drawSelection(of: selected, in: ctx)
         }
@@ -91,15 +95,15 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     /// - 画笔、荧光笔、文字、序号：不画任何框（只能移动）
     private func drawSelection(of selected: Annotation, in ctx: CGContext) {
         let u = canvasUnitsPerPoint
-        let handles = selected.resizeHandles
-        guard !handles.isEmpty else { return }
+        guard !selected.resizeHandles.isEmpty else { return }
+        let handles = visibleResizeHandles(of: selected)
         ctx.saveGState()
         defer { ctx.restoreGState() }
         switch selected.shape {
         case .mosaic(let rect), .blur(let rect):
             ctx.setLineWidth(1 * u)
             ctx.setStrokeColor(OverlayAccent.screenshot.cgColor)
-            ctx.stroke(rect)
+            ctx.stroke(canvasBounds.isEmpty ? rect : rect.intersection(canvasBounds))
         default:
             break
         }
@@ -147,9 +151,17 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
 
     // MARK: - 选中、移动、删除
 
-    /// 鼠标正好在其上的标注（有重叠时取最上面的）
+    /// 鼠标正好在其上的标注（有重叠时取最上面的）。范围外看不见的部分点不中
     func annotation(at point: CGPoint) -> Annotation? {
-        document.annotations.last { $0.contains(point) }
+        guard canvasBounds.isEmpty || canvasBounds.contains(point) else { return nil }
+        return document.annotations.last { $0.contains(point) }
+    }
+
+    /// 在范围内（含边上）的控制点：范围外的看不见，不画也点不中
+    private func visibleResizeHandles(of annotation: Annotation) -> [(handle: Annotation.ResizeHandle, point: CGPoint)] {
+        guard !canvasBounds.isEmpty else { return annotation.resizeHandles }
+        let area = canvasBounds.insetBy(dx: -1, dy: -1)
+        return annotation.resizeHandles.filter { area.contains($0.point) }
     }
 
     /// 按下去能拖动的标注：要正好按在画出来的地方（选中的也一样；空心方框里面不算）
@@ -161,7 +173,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
     func resizeHandle(at point: CGPoint) -> Annotation.ResizeHandle? {
         guard let selected = selectedAnnotation else { return nil }
         let radius = 7 * canvasUnitsPerPoint
-        return selected.resizeHandles
+        return visibleResizeHandles(of: selected)
             .map { ($0.handle, hypot(point.x - $0.point.x, point.y - $0.point.y)) }
             .filter { $0.1 <= radius }
             .min { $0.1 < $1.1 }?.0

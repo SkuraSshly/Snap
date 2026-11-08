@@ -388,6 +388,7 @@ final class ScreenshotSession: OverlayEventHandler {
         view.installAnnotationLayer(controller.layer)
         annotator = controller
         annotatorDisplayID = id
+        updateCanvasBounds()
         return controller
     }
 
@@ -434,10 +435,8 @@ final class ScreenshotSession: OverlayEventHandler {
                     frame.origin.y = s.minY + margin   // 上下都放不下：放在选区内底部
                 }
             }
-            annotator?.canvasBounds = s
         } else {
             frame = CGRect(x: (bounds.width - size.width) / 2, y: 28, width: size.width, height: size.height)
-            annotator?.canvasBounds = bounds
         }
         frame.origin.x = min(max(frame.minX, bounds.minX + 4), bounds.maxX - size.width - 4)
         toolbar.setFrameOrigin(CGPoint(x: frame.minX.rounded(), y: frame.minY.rounded()))
@@ -467,7 +466,20 @@ final class ScreenshotSession: OverlayEventHandler {
             && (selector.selection == nil || selector.isSizing)
     }
 
+    /// 标注的范围：区域模式是选区，全屏模式是整块屏幕。只能在这里面画，标注也只显示这里面的部分（和输出的图片一致）。
+    /// 每次刷新都更新：拖选区的控制点时，标注随选区实时裁剪
+    private func updateCanvasBounds() {
+        guard let annotator, let id = annotatorDisplayID, let frozen = displays[id] else { return }
+        let screen = frozen.screen.frame
+        if mode == .fullscreen {
+            annotator.canvasBounds = CGRect(origin: .zero, size: screen.size)
+        } else if let selection = selector.selection {
+            annotator.canvasBounds = selection.offsetBy(dx: -screen.minX, dy: -screen.minY)
+        }
+    }
+
     private func refresh() {
+        updateCanvasBounds()
         for (id, window) in overlays {
             guard let view = window.contentView as? OverlayView, let frozen = displays[id] else { continue }
             var state = OverlayState(mode: mode, isActiveScreen: id == activeDisplayID)

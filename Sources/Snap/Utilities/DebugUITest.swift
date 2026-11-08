@@ -1090,6 +1090,28 @@ enum DebugUITest {
             session.overlayMouseDragged(to: corner)
             session.overlayMouseUp(at: corner)
             check("拖回去：选区恢复原样", session.debugSelector.selection == region)
+
+            // 缩小选区：标注实时按选区裁剪（看到的就是输出的），露在外面的部分点不中；标注本身不删改，放大选区后又出现
+            let o = g(0, 0)
+            let shrunk = CGPoint(x: region.minX + 50, y: region.minY)
+            session.overlayMouseDown(at: corner)
+            session.overlayMouseDragged(to: CGPoint(x: corner.x - 100, y: corner.y))
+            session.overlayMouseDragged(to: shrunk)
+            let liveBounds = annotator.canvasBounds
+            session.overlayMouseUp(at: shrunk)
+            let localRegion = session.debugSelector.selection?.offsetBy(dx: -o.x, dy: -o.y)
+            check("缩小选区：拖动中标注范围就跟着变（实时裁剪）", localRegion != nil && liveBounds == localRegion
+                  && annotator.canvasBounds == localRegion, "\(liveBounds) / \(String(describing: localRegion))")
+            check("选区外的部分点不中，选区内的部分照常", annotator.annotation(at: CGPoint(x: 179, y: 145)) == nil
+                  && annotator.annotation(at: CGPoint(x: 121, y: 145))?.id == firstID
+                  && session.overlayCursor(at: g(179, 145)) != .snapMove)
+            check("缩小选区不删改标注", document.annotations.count == count && rectOfFirst() == originalRect)
+            render("10h-缩小选区后标注按选区裁剪")
+            session.overlayMouseDown(at: shrunk)
+            session.overlayMouseDragged(to: corner)
+            session.overlayMouseUp(at: corner)
+            check("放大回去：标注完整出现，又能点中", session.debugSelector.selection == region
+                  && annotator.annotation(at: CGPoint(x: 179, y: 145))?.id == firstID)
         }
         session.debugSelectTool(nil)
 
