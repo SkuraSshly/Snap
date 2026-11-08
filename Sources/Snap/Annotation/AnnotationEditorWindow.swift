@@ -210,11 +210,11 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// 鼠标所在位置的光标：选中标注的控制点上是调整大小的箭头；正好在已有标注上（或正在拖动）时是系统标准指针
+    /// 鼠标所在位置的光标：选中标注的控制点上是调整大小的箭头；正好在已有标注上（或正在拖动）时是四向移动光标
     func canvasCursor(at point: CGPoint) -> NSCursor {
         if toolbar.isShowingColorPicker { return .arrow }
         if let cursor = annotator.resizeCursor(at: point) { return cursor }
-        if annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: point) != nil { return .arrow }
+        if annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: point) != nil { return .snapMove }
         return canvasCursor
     }
 
@@ -281,7 +281,7 @@ final class EditorCanvasView: NSView {
         if let editor { addCursorRect(bounds, cursor: editor.canvasCursor) }
     }
 
-    /// 跟踪鼠标移动，悬停在标注上时换成标准指针
+    /// 跟踪鼠标移动，悬停在标注上时换成四向移动光标
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)

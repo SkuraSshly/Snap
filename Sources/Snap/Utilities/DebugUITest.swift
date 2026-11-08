@@ -896,9 +896,11 @@ enum DebugUITest {
         style.color = AnnotationPalette.colors[3]
         style.size = .large
         session.debugSetStyle(style)
-        for (tool, a, b) in [(AnnotationTool.arrow, g(130, 180), g(190, 220)), (.line, g(200, 110), g(250, 110)),
-                             (.ellipse, g(240, 150), g(295, 200)), (.pen, g(150, 200), g(190, 235)),
+        for (tool, a, b) in [(AnnotationTool.arrow, g(155, 183), g(190, 220)), (.line, g(200, 110), g(250, 110)),
+                             (.ellipse, g(295, 200), g(240, 150)), (.pen, g(145, 205), g(190, 235)),
                              (.highlighter, g(105, 160), g(200, 160))] {
+            // 按在已有标注上会拖动它而不是画新的：起点都选在空白处
+            check("\(tool.title)的起点在空白处", annotator.annotation(at: CGPoint(x: a.x - g(0, 0).x, y: a.y - g(0, 0).y)) == nil)
             session.debugSelectTool(tool)
             drag(a, b)
         }
@@ -943,8 +945,9 @@ enum DebugUITest {
         let originalRect = rectOfFirst()
         // 精准：只有正好在线条上才算「在标注上」（矩形线宽 4 点，边框在 x = 120）。
         // annotation(at:) 用画布坐标（屏幕内坐标），overlayCursor 用全局坐标
-        check("鼠标在矩形边框上：变成标准指针", annotator.annotation(at: CGPoint(x: 121, y: 145))?.id == firstID
-              && session.overlayCursor(at: g(121, 145)) == .arrow)
+        check("鼠标在矩形边框上：变成四向移动光标", annotator.annotation(at: CGPoint(x: 121, y: 145))?.id == firstID
+              && session.overlayCursor(at: g(121, 145)) == .snapMove)
+        NSCursor.debugRenderMovePreview(to: dir.appendingPathComponent("10g-移动光标.png"))
         check("离边框 5 点：不算在标注上，仍是十字", annotator.annotation(at: CGPoint(x: 115, y: 145)) == nil
               && annotator.annotation(at: CGPoint(x: 126, y: 145)) == nil && session.overlayCursor(at: g(115, 145)) != .arrow)
         check("方框内部：不算在标注上", annotator.annotation(at: CGPoint(x: 150, y: 135)) == nil)
@@ -990,10 +993,14 @@ enum DebugUITest {
               && document.annotations.count == 12, "\(String(describing: rectOfFirst()))")
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
         _ = session.overlayKeyDown(key(kVK_Escape, false, ""))
-        // 选着工具时从未选中的标注上开始拖：画新的标注，不会把它拖走
-        drag(g(121, 145), g(100, 110))
-        check("选着工具时从未选中的标注上拖：画新的标注", document.annotations.count == 13 && rectOfFirst() == originalRect)
+        // 选着工具时从没选中的标注上直接按住拖：移动它（不用先单击选中），不画新的
+        check("没选中时：标注上是四向移动光标", annotator.selectedID == nil && session.overlayCursor(at: g(121, 135)) == .snapMove)
+        drag(g(121, 135), g(111, 125))
+        check("选着工具时从没选中的标注上直接拖：移动它，不画新的", document.annotations.count == 12
+              && rectOfFirst() == originalRect?.offsetBy(dx: -10, dy: -10) && annotator.selectedID == firstID,
+              "\(String(describing: rectOfFirst()))")
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        _ = session.overlayKeyDown(key(kVK_Escape, false, ""))
 
         // 序号：删掉第 1 个后，下一个是 3（不会和现有的 2 重复）
         session.debugSelectTool(nil)
@@ -1004,24 +1011,15 @@ enum DebugUITest {
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
         check("测试操作全部撤销后，标注恢复原样", document.annotations.count == 12 && rectOfFirst() == originalRect)
 
-        // 选中后在虚线框内任何位置都能拖动（方框内部本来不算「在标注上」）
-        session.overlayMouseDown(at: g(121, 145))
-        session.overlayMouseUp(at: g(121, 145))
-        check("选中后虚线框内部：标准指针", session.overlayCursor(at: g(150, 135)) == .arrow
-              && annotator.grabbableAnnotation(at: CGPoint(x: 150, y: 135))?.id == firstID)
-        session.overlayMouseDown(at: g(150, 135))
-        session.overlayMouseDragged(to: g(155, 138))
-        session.overlayMouseDragged(to: g(160, 140))
-        session.overlayMouseUp(at: g(160, 140))
-        check("在虚线框内部拖动：整体平移 (10, 5)", rectOfFirst() == originalRect?.offsetBy(dx: 10, dy: 5),
-              "\(String(describing: rectOfFirst()))")
-        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        // 选中后不显示虚线框，方框内部也不能拖（要按在线条上才能拖）；选着工具时在里面拖是画新的标注
+        session.overlayMouseDown(at: g(121, 135))
+        session.overlayMouseUp(at: g(121, 135))
+        check("选中后方框内部：不能拖，不显示移动光标", annotator.selectedID == firstID
+              && annotator.grabbableAnnotation(at: CGPoint(x: 150, y: 135)) == nil
+              && session.overlayCursor(at: g(150, 135)) != .snapMove)
         session.debugSelectTool(.rectangle)
-        session.overlayMouseDown(at: g(150, 135))
-        session.overlayMouseDragged(to: g(160, 135))
-        session.overlayMouseUp(at: g(160, 135))
-        check("选着工具时在已选中标注的虚线框内拖：移动它，不画新的", rectOfFirst() == originalRect?.offsetBy(dx: 10, dy: 0)
-              && document.annotations.count == 12)
+        drag(g(140, 130), g(165, 150))
+        check("选着工具时在已选中标注的方框内拖：画新的，不移动它", document.annotations.count == 13 && rectOfFirst() == originalRect)
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
         session.debugSelectTool(nil)
 
@@ -1159,10 +1157,11 @@ enum DebugUITest {
         var faint = AnnotationStyle()
         faint.opacity = 0.3
         session.debugSetStyle(faint)
+        // 起点选在空白处（按在已有标注上是拖动它）
         session.debugSelectTool(.mosaic)
-        drag(g(150, 160), g(190, 190))
+        drag(g(150, 140), g(175, 152))
         session.debugSelectTool(.blur)
-        drag(g(150, 160), g(190, 190))
+        drag(g(190, 140), g(215, 152))
         let lastTwo = document.annotations.suffix(2)
         check("不透明度 30% 时画的马赛克、模糊仍完全不透明", document.annotations.count == 14
               && lastTwo.allSatisfy { $0.opacity == 1 } && lastTwo.map(\.tool) == [.mosaic, .blur])
@@ -1188,7 +1187,7 @@ enum DebugUITest {
         session.debugSelectTool(.arrow)
         check("换回箭头：恢复箭头上次的大号、黄色、60%", annotator.style.size == .large
               && annotator.style.color.isSameColor(as: yellow) && annotator.style.opacity == 0.6)
-        drag(g(150, 160), g(190, 190))
+        drag(g(150, 140), g(172, 152))
         let newArrow = document.annotations.last
         check("新画的箭头用箭头的样式", newArrow?.tool == .arrow && newArrow?.size == .large && newArrow?.opacity == 0.6)
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)

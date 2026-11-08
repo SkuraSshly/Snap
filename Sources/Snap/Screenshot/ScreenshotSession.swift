@@ -656,10 +656,10 @@ final class ScreenshotSession: OverlayEventHandler {
         if isAnnotating, mode == .region, selector.isSizing || selector.cornerHandle(at: point) != nil {
             return selector.cursor(at: point)
         }
-        // 鼠标正好在已有的标注上、在选中标注的虚线框内（或正在拖动标注）：系统标准指针，表示可以选中、拖动
+        // 鼠标正好在已有的标注上（或正在拖动标注）：四向移动光标，表示可以选中、拖动
         if let annotator, let p = canvasPoint(point),
            annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: p) != nil {
-            return .arrow
+            return .snapMove
         }
         // 选了标注工具：可画的范围内是十字（文字工具是 I 形），范围外是箭头
         if let annotator, let tool = annotator.tool {
