@@ -149,7 +149,8 @@ enum DebugFeatureTest {
         check("显示文字：⌃⌥⌘J / ⌃ ⌥ ⌘ J", custom.displayString == "⌃⌥⌘J" && custom.spacedDisplayString == "⌃ ⌥ ⌘ J",
               custom.spacedDisplayString)
         let titles = StatusBarController.debugCurrent?.debugMenuTitles ?? []
-        check("菜单里多了「将录屏转为 GIF…」", titles.contains("将录屏转为 GIF…"), "\(titles)")
+        let shown = titles.filter { !$0.isEmpty }
+        check("菜单只有截图、录屏、截屏翻译、设置、退出", shown == ["截图", "录屏", "截屏翻译", "设置…", "退出 Snap"], "\(shown)")
         // 冲突时保留原来的快捷键
         _ = coordinator.setHotkey(hk(kVK_ANSI_V, cmdKey), for: .screenshot)
         check("冲突时保留原来的快捷键", Preferences.shared.screenshotHotkey == custom)

@@ -395,7 +395,6 @@ enum DebugShowcase {
         func click(_ p: CGPoint) { session.overlayMouseDown(at: p); session.overlayMouseUp(at: p) }
         var style = AnnotationStyle()
         style.color = AnnotationPalette.colors[0]
-        style.size = .medium
         session.debugSetStyle(style)
         let june = chartBarX(5)
         session.debugSelectTool(.mosaic)

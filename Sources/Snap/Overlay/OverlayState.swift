@@ -46,10 +46,12 @@ protocol OverlayEventHandler: AnyObject {
     func overlayCursor(at point: NSPoint) -> NSCursor
 }
 
-/// 截图用蓝色、录屏用红色
+/// 截图界面、录屏界面、截屏翻译的强调色：都取自温暖的主题配色
 enum OverlayAccent {
-    static let screenshot = NSColor(srgbRed: 0.04, green: 0.52, blue: 1.0, alpha: 1)
-    static let recording = NSColor(srgbRed: 1.0, green: 0.23, blue: 0.19, alpha: 1)
-    /// 截屏翻译：薄荷绿，一眼和截图（蓝）、录屏（红）区分开
-    static let translate = NSColor(srgbRed: 0.13, green: 0.70, blue: 0.56, alpha: 1)
+    /// 截图：主题的杏色（选区边框、控制点、标注的控制点、长截图的边框、选中的钉图）
+    static let screenshot = WarmPalette.apricot
+    /// 录屏：主题的珊瑚红
+    static let recording = WarmPalette.coral
+    /// 截屏翻译：鼠尾草绿（设置界面里用的那种柔和的绿），和截图、录屏一眼区分开，又同属温暖的配色
+    static let translate = NSColor(srgbRed: 0.45, green: 0.70, blue: 0.47, alpha: 1)
 }

@@ -206,6 +206,12 @@ final class ToolbarButton: WarmControl {
         updateAppearance()
     }
 
+    /// 换成自己画的图标（模板图，颜色和系统图标一样跟着按钮状态变）
+    func setImage(_ image: NSImage) {
+        iconView.image = image
+        updateAppearance()
+    }
+
     override func layout() {
         super.layout()
         iconView.frame = bounds

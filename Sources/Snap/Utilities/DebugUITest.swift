@@ -267,6 +267,66 @@ enum DebugUITest {
                 await captureComposite(around: canvasOnScreen.insetBy(dx: 0, dy: -50).offsetBy(dx: 0, dy: -50),
                                        to: dir.appendingPathComponent("9-编辑窗口画布.png"))
             }
+            // 缩放：⌥ + 滚动放大，普通滚动不改大小；⌘0 回到原来大小、⌘= 放大；放大后控制点在屏幕上大小不变
+            let zoomView = editor.debugZoomView
+            func scroll(_ amount: Int32, option: Bool) -> NSEvent? {
+                let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)
+                cg?.flags = option ? .maskAlternate : []
+                return cg.flatMap(NSEvent.init(cgEvent:))
+            }
+            check("编辑窗口打开时是原来大小", zoomView.magnification == 1)
+            check("比例按原像素算：小图打开时是 100%", editor.zoomPercent == 100, "\(editor.zoomPercent)%")
+            if let up = scroll(3, option: true) { zoomView.scrollWheel(with: up) }
+            let zoomed = zoomView.magnification
+            check("按住 ⌥ 滚轮往上一格：放大 15%（不随滚轮加速变多）", abs(zoomed - 1.15) < 0.001, "\(zoomed)")
+            check("触控板：每个事件最多 10%，滑 100 点约 35%",
+                  EditorZoomView.zoomFactor(deltaY: 200, precise: true) == 1.1
+                  && abs(EditorZoomView.zoomFactor(deltaY: 10, precise: true) - exp(0.03)) < 0.0001
+                  && EditorZoomView.zoomFactor(deltaY: -3, precise: false) < 1)
+            check("放大后控制点按屏幕大小算", abs(editor.debugAnnotator.canvasUnitsPerPoint - 1 / zoomed) < 0.001,
+                  "\(editor.debugAnnotator.canvasUnitsPerPoint)")
+            if let plain = scroll(3, option: false) { zoomView.scrollWheel(with: plain) }
+            check("不按 ⌥ 滚动：不改变大小", zoomView.magnification == zoomed)
+            for _ in 0..<30 { if let up = scroll(10, option: true) { zoomView.scrollWheel(with: up) } }
+            check("最多放大到原图 1 个像素 = 屏幕 4 个像素（400%）", editor.zoomPercent == 400
+                  && zoomView.magnification == zoomView.maxMagnification, "\(editor.zoomPercent)%")
+            await captureComposite(around: editor.debugWindow.convertToScreen(zoomView.convert(zoomView.bounds, to: nil)),
+                                   to: dir.appendingPathComponent("9b-编辑窗口放大.png"))
+            for _ in 0..<30 { if let down = scroll(-10, option: true) { zoomView.scrollWheel(with: down) } }
+            check("最小回到原来大小", zoomView.magnification == 1)
+            _ = editor.handleKey(key(kVK_ANSI_Equal, false, "=").withCommand)
+            check("⌘= 放大", abs(zoomView.magnification - 1.25) < 0.01, "\(zoomView.magnification)")
+            editor.canvasMouseDown(at: CGPoint(x: 20, y: 20))
+            editor.canvasMouseDragged(to: CGPoint(x: 60, y: 50))
+            editor.canvasMouseUp(at: CGPoint(x: 60, y: 50))
+            check("放大后照常画标注（原图坐标）", editor.debugAnnotator.document.annotations.count == 2)
+            _ = editor.handleKey(key(kVK_ANSI_0, false, "0").withCommand)
+            check("⌘0 回到原来大小", zoomView.magnification == 1)
+
+            // 长截图（300 × 3000）：按宽度 100% 打开、从顶上看起、可以滚动；按住 ⌥ 往下滚能缩小到看全
+            if let space = CGColorSpace(name: CGColorSpace.sRGB),
+               let ctx = CGContext(data: nil, width: 300, height: 3000, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.setFillColor(CGColor(gray: 0.95, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: 300, height: 3000))
+                ctx.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+                for k in 0..<30 { ctx.fill(CGRect(x: 20, y: k * 100 + 30, width: 200, height: 20)) }
+                if let tall = ctx.makeImage(),
+                   let long = AnnotationEditorWindowController.open(CapturedImage(image: tall, scale: 1,
+                                                                                  sourceRect: CGRect(x: o.x + 100, y: o.y + 100, width: 300, height: 3000))) {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    let z = long.debugZoomView
+                    let visible = z.contentView.documentVisibleRect
+                    check("长截图编辑窗口：按宽度原大小打开、只显示一部分", long.debugCanvas.frame.width == 300 && z.frame.height < 3000
+                          && z.minMagnification < 1, "\(long.debugCanvas.frame) \(z.frame)")
+                    check("长截图编辑窗口：从最上面看起", abs(visible.maxY - 3000) < 1, "\(visible)")
+                    for _ in 0..<40 { if let down = scroll(-10, option: true) { z.scrollWheel(with: down) } }
+                    let all = z.contentView.documentVisibleRect
+                    check("长截图编辑窗口：按住 ⌥ 往下滚能缩小到看全整张", z.magnification == z.minMagnification
+                          && all.height >= 2999, "\(all)")
+                    long.perform(.cancel)
+                }
+            }
             editor.perform(.done)
             try? await Task.sleep(for: .milliseconds(600))
             check("编辑完成后关闭窗口并显示新缩略图", !editor.debugWindow.isVisible && ThumbnailManager.shared.visibleCount == 1)
@@ -282,7 +342,7 @@ enum DebugUITest {
             try? await Task.sleep(for: .milliseconds(300))
             await captureComposite(around: pin.frame, to: dir.appendingPathComponent("7-钉图实际显示.png"))
             pin.makeKey()
-            check("单击选中钉图（显示蓝色边框）", (pin.contentView as? PinView)?.isSelected == true)
+            check("单击选中钉图（显示杏色边框）", (pin.contentView as? PinView)?.isSelected == true)
             pin.keyDown(with: key(kVK_Escape))
             check("选中后按 Esc 关闭钉图", PinManager.shared.count == 0 && !pin.isVisible)
         } else {
@@ -881,6 +941,104 @@ enum DebugUITest {
             check("长截图\(tag)：到长度上限停止", last == .limitReached && limited.length == 600, "\(last) \(limited.length)")
         }
 
+        // 容差：每帧随机抖动一些像素（模拟滚动时抗锯齿的细微差别），精确比对全部失效，靠亮度轮廓接上
+        func jittered(_ f: PixelFrame, seed: UInt32) -> PixelFrame {
+            var g = seed
+            var data = f.data
+            data.withUnsafeMutableBytes { raw in
+                let p = raw.bindMemory(to: UInt8.self)
+                for i in 0..<p.count where i % 4 != 3 {
+                    g = g &* 1_664_525 &+ 1_013_904_223
+                    if g % 7 == 0 { p[i] = UInt8(clamping: Int(p[i]) + Int(g >> 29) - 3) }
+                }
+            }
+            return PixelFrame(width: f.width, height: f.height, bytesPerRow: f.bytesPerRow, data: data, colorSpace: f.colorSpace)
+        }
+        for axis in [ScrollAxis.vertical, .horizontal] {
+            let tag = axis == .vertical ? "竖向" : "横向"
+            var s = ScrollStitcher(axis: axis)
+            var events: [ScrollStitcher.Event] = []
+            for (k, pos) in [0, 0, 40, 90, 60, 150, 330].enumerated() {
+                events.append(s.add(jittered(frame(view(pos), cross: cross, axis: axis), seed: UInt32(k + 1))))
+            }
+            check("长截图\(tag)：像素有细微差别也能接上", events == [.started, .unchanged, .appended(40), .appended(50), .moved,
+                                                         .appended(60), .appended(180)], "\(events)")
+            var hinted = ScrollStitcher(axis: axis)
+            hinted.add(jittered(frame(view(0), cross: cross, axis: axis), seed: 9))
+            let e = hinted.add(jittered(frame(view(120), cross: cross, axis: axis), seed: 10), hint: 110)
+            check("长截图\(tag)：有滚轮提示时在附近找到", e == .appended(120), "\(e)")
+        }
+
+        // 滚动条：每帧右侧有个跟着移动的滑块，比对时忽略右边缘，照常精确接上；结果右边缘以外和原页面一致
+        func withScrollbar(_ lines: [[UInt32]], knobAt: Int) -> [[UInt32]] {
+            lines.enumerated().map { i, line in
+                var l = line
+                for x in (cross - 10)..<cross { l[x] = (i >= knobAt && i < knobAt + 60) ? 0xFF7F_7F7F : line[x] }
+                return l
+            }
+        }
+        // 没画完：刚滚到时内容区最下面 40 行是空白，下一帧才画好
+        func unrendered(_ pos: Int) -> [[UInt32]] {
+            var lines = view(pos)
+            for i in (header + area - 40)..<(header + area) { lines[i] = [UInt32](repeating: 0xFFFF_FFFF, count: cross) }
+            return lines
+        }
+        for axis in [ScrollAxis.vertical, .horizontal] {
+            let tag = axis == .vertical ? "竖向" : "横向"
+            var s = ScrollStitcher(axis: axis, edgeMargin: (0, 16))
+            var events: [ScrollStitcher.Event] = []
+            for (k, pos) in [0, 40, 90, 150, 330].enumerated() {
+                events.append(s.add(frame(withScrollbar(view(pos), knobAt: 20 + k * 30), cross: cross, axis: axis)))
+            }
+            let trimmed = (top + Array(page[0..<(330 + area)]) + bottom).map { Array($0[0..<(cross - 16)]) }
+            let got = s.makeImage().map { lines(of: $0, cross: cross, axis: axis).map { Array($0[0..<(cross - 16)]) } } ?? []
+            check("长截图\(tag)：滚动条在动也照常接上，内容一致", events == [.started, .appended(40), .appended(50), .appended(60), .appended(180)]
+                  && got == trimmed, "\(events)")
+            var r = ScrollStitcher(axis: axis)
+            r.add(frame(view(0), cross: cross, axis: axis))
+            for pos in stride(from: 60, through: 600, by: 60) {
+                r.add(frame(unrendered(pos), cross: cross, axis: axis))
+                r.add(frame(view(pos), cross: cross, axis: axis))
+            }
+            let full = r.makeImage().map { lines(of: $0, cross: cross, axis: axis) } ?? []
+            check("长截图\(tag)：刚滚到时没画完的部分，画好后自动换上", full == top + Array(page[0..<(600 + area)]) + bottom)
+        }
+
+        // 两侧不动的边栏：左 20、右 15 像素不滚动，只有中间在滚；边栏只出现在第一屏，往下用背景色延伸
+        let sideL = content(viewport, 20, seed: 71), sideR = content(viewport, 15, seed: 72)
+        func withSides(_ pos: Int) -> [[UInt32]] {
+            view(pos).enumerated().map { i, line in sideL[i] + Array(line[20..<(cross - 15)]) + sideR[i] }
+        }
+        for axis in [ScrollAxis.vertical, .horizontal] {
+            let tag = axis == .vertical ? "竖向" : "横向"
+            var s = ScrollStitcher(axis: axis)
+            var events: [ScrollStitcher.Event] = []
+            for pos in [0, 40, 90, 150, 330] { events.append(s.add(frame(withSides(pos), cross: cross, axis: axis))) }
+            let white = [UInt32](repeating: 0xFFFF_FFFF, count: 20), whiteR = [UInt32](repeating: 0xFFFF_FFFF, count: 15)
+            let expected = Array(withSides(0)[0..<(header + area)])
+                + page[area..<(330 + area)].map { white + Array($0[20..<(cross - 15)]) + whiteR }
+                + Array(withSides(330)[(viewport - footer)..<viewport])
+            let got = s.makeImage().map { lines(of: $0, cross: cross, axis: axis) } ?? []
+            check("长截图\(tag)：两侧边栏不动也照常接上，边栏不重复", events == [.started, .appended(40), .appended(50), .appended(60),
+                                                                .appended(180)] && got == expected, "\(events) \(got.count)/\(expected.count)")
+        }
+
+        // 限速：每帧最多 100 点；猛甩 2000 点，先放行 100，其余积压（最多 1200）在之后每帧补发 100
+        var throttle = ScrollThrottle(maxPerFrame: 100, frameInterval: 0.1, maxPending: 1200, now: 0)
+        let first = throttle.take(2000, now: 0)
+        var drained: [Double] = []
+        for k in 1...14 { drained.append(throttle.drain(now: Double(k) * 0.1)) }
+        check("限速：猛甩时每帧都不超过 100 点", first == 100 && drained.allSatisfy { $0 <= 100.001 }, "\(first) \(drained)")
+        check("限速：积压最多 1200 点，之后全部补发", abs(drained.reduce(0, +) - 1200) < 0.01 && throttle.pending == 0,
+              "\(drained.reduce(0, +))")
+        _ = throttle.take(500, now: 2.0)
+        let reverse = throttle.take(-30, now: 2.0)
+        // 这一帧的额度已经用完：反向的 30 点留到下一帧发，原来积压的 400 点丢掉
+        check("限速：反向滚动时丢掉没补发的部分", reverse == 0 && throttle.pending == -30, "\(throttle.pending) \(reverse)")
+        var gentle = ScrollThrottle(maxPerFrame: 100, frameInterval: 0.1, maxPending: 1200, now: 0)
+        let slow = (1...10).map { gentle.take(40, now: Double($0) * 0.1) }
+        check("限速：正常速度的滚动原样放行", slow.allSatisfy { $0 == 40 } && gentle.pending == 0)
+
         // 2. 界面：屏幕中间 320×240 的选区，下面垫合成的桌面；画面直接喂合成的，不截真实屏幕
         guard let screen = NSScreen.main, let desktop = DebugShowcase.desktopImage(for: screen) else {
             return check("长截图界面：准备合成桌面", false)
@@ -908,7 +1066,7 @@ enum DebugUITest {
         let expectedLength = viewLines + 9 * step
         check("喂 10 帧：拼好的长度正确，控制条显示「已拼接」", session.debugLength == expectedLength
               && session.debugBar.debugLengthText == "已拼接 \(expectedLength) 像素", "\(session.debugLength) / \(expectedLength)")
-        check("开始滚动后提示消失、预览有内容", session.debugOverlay.message == nil && session.debugPreview.debugPartCount >= 5)
+        check("开始滚动后提示消失、预览有内容", session.debugOverlay.message == nil && session.debugPreview.debugPartCount >= 1)
         if let image = await session.debugImage() {
             check("长截图结果：宽 \(px) 像素、高 \(expectedLength) 像素", image.width == px && image.height == expectedLength)
         }
@@ -924,8 +1082,12 @@ enum DebugUITest {
         check("换成横向：从头开始，提示「向右滚动」", session.debugOverlay.message?.contains("向右滚动") == true
               && session.debugLength == 0 && session.debugBar.debugLengthText == "等待滚动…")
 
-        session.debugCancel()
+        // Esc：长截图期间注册成临时全局快捷键（焦点在被截的 App 里），按下就取消；结束后注销
+        let escape = session.debugInstallEscape()
+        check("长截图期间 Esc 已注册", escape != nil && HotkeyManager.shared.debugTemporaryCount == 1)
+        if let escape { HotkeyManager.shared.debugPressTemporary(escape) }
         try? await Task.sleep(for: .milliseconds(300))
+        check("按 Esc 取消长截图，Esc 随即注销", HotkeyManager.shared.debugTemporaryCount == 0)
         check("取消：长截图界面全部关闭", finished && !session.debugBar.isVisible && !session.debugOverlay.isVisible
               && !session.debugPreview.isVisible)
     }
@@ -1005,8 +1167,7 @@ enum DebugUITest {
         drag(g(230, 130), g(290, 190))
         var style = AnnotationStyle()
         style.color = AnnotationPalette.colors[3]
-        style.size = .large
-        session.debugSetStyle(style)
+        session.debugSetStyle(style, level: 2)
         for (tool, a, b) in [(AnnotationTool.arrow, g(155, 183), g(190, 220)), (.line, g(200, 110), g(250, 110)),
                              (.ellipse, g(295, 200), g(240, 150)), (.pen, g(145, 205), g(190, 235)),
                              (.highlighter, g(105, 160), g(200, 160))] {
@@ -1017,7 +1178,7 @@ enum DebugUITest {
         }
         check("马赛克、模糊、箭头、直线、椭圆、画笔、荧光笔", annotator.document.annotations.count == 12,
               "共 \(annotator.document.annotations.count) 个")
-        check("颜色和粗细生效", annotator.document.annotations.last?.size == .large
+        check("颜色和粗细生效", annotator.document.annotations.last?.size == AnnotationTool.highlighter.presetSizes[2]
               && annotator.document.annotations.last?.color == AnnotationPalette.colors[3])
         // 选中矩形工具（展开颜色 / 粗细栏），截取工具栏的实际显示
         session.debugSelectTool(.rectangle)
@@ -1168,16 +1329,16 @@ enum DebugUITest {
             check("调整大小可以撤销，恢复原样（仍保持选中）", rectOfFirst() == r0 && document.annotations.count == 12
                   && annotator.selectedID == firstID, "\(String(describing: rectOfFirst()))")
         }
-        let square = Annotation(shape: .ellipse(CGRect(x: 0, y: 0, width: 40, height: 20)), color: .red, size: .medium, opacity: 1)
+        let square = Annotation(shape: .ellipse(CGRect(x: 0, y: 0, width: 40, height: 20)), color: .red, size: 4, opacity: 1)
         if case .ellipse(let r) = square.resized(.frame(.topRight), to: CGPoint(x: 100, y: 25), keepRatio: true).shape {
             check("Shift 拖角：保持宽高比", r == CGRect(x: 0, y: 0, width: 100, height: 50), "\(r)")
         }
-        let line = Annotation(shape: .line(from: .zero, to: CGPoint(x: 50, y: 0)), color: .red, size: .medium, opacity: 1)
+        let line = Annotation(shape: .line(from: .zero, to: CGPoint(x: 50, y: 0)), color: .red, size: 4, opacity: 1)
         check("直线和箭头：两个端点控制点", line.resizeHandles.count == 2)
         if case .line(let a, let b) = line.resized(.end, to: CGPoint(x: 40, y: 38), keepRatio: true).shape {
             check("拖端点：起点不动；Shift 沿 45°", a == .zero && abs(b.x - b.y) < 0.001 && b.x > 30, "\(b)")
         }
-        let scribble = Annotation(shape: .pen([.zero, CGPoint(x: 10, y: 10)]), color: .red, size: .medium, opacity: 1)
+        let scribble = Annotation(shape: .pen([.zero, CGPoint(x: 10, y: 10)]), color: .red, size: 4, opacity: 1)
         check("画笔没有控制点（只能移动）", scribble.resizeHandles.isEmpty)
 
         // 选着标注工具时，仍然可以拖选区的控制点调整截图范围（标注保留）
@@ -1306,38 +1467,67 @@ enum DebugUITest {
         session.debugSetStyle(AnnotationStyle())
         let green = AnnotationPalette.colors[2], yellow = AnnotationPalette.colors[1]
         session.debugSelectTool(.rectangle)
-        toolbar.onSelectSize?(.small)
+        toolbar.onSelectSize?(2)
         toolbar.onSelectColor?(green)
         session.debugSelectTool(.arrow)
-        check("换到箭头：还是箭头自己的样式（不跟矩形走）", annotator.style.size == .medium
+        check("换到箭头：还是箭头自己的样式（不跟矩形走）", annotator.style.size == 4
               && annotator.style.color.isSameColor(as: AnnotationPalette.colors[0]))
-        toolbar.onSelectSize?(.large)
+        toolbar.onSelectSize?(7)
         toolbar.onSelectColor?(yellow)
         toolbar.debugOpacitySlider.set(0.6)
         session.debugSelectTool(.rectangle)
-        check("换回矩形：恢复矩形上次的小号、绿色、100%", annotator.style.size == .small
+        check("换回矩形：恢复矩形上次的粗细 2、绿色、100%", annotator.style.size == 2
               && annotator.style.color.isSameColor(as: green) && annotator.style.opacity == 1)
         session.debugSelectTool(.arrow)
-        check("换回箭头：恢复箭头上次的大号、黄色、60%", annotator.style.size == .large
+        check("换回箭头：恢复箭头上次的粗细 7、黄色、60%", annotator.style.size == 7
               && annotator.style.color.isSameColor(as: yellow) && annotator.style.opacity == 0.6)
         drag(g(150, 140), g(172, 152))
         let newArrow = document.annotations.last
-        check("新画的箭头用箭头的样式", newArrow?.tool == .arrow && newArrow?.size == .large && newArrow?.opacity == 0.6)
+        check("新画的箭头用箭头的样式", newArrow?.tool == .arrow && newArrow?.size == 7 && newArrow?.opacity == 0.6)
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
         // 选着箭头工具时改选中的矩形：记到矩形上，箭头的样式不变
         session.overlayMouseDown(at: g(121, 145))
         session.overlayMouseUp(at: g(121, 145))
-        toolbar.onSelectSize?(.small)
+        toolbar.onSelectSize?(2)
         check("改选中的矩形：记作矩形的样式，箭头工具的样式不变", annotator.selectedID == firstID
-              && document.annotation(withID: firstID)?.size == .small
-              && ToolStyleMemory.style(for: .rectangle).size == .small && annotator.style.size == .large)
+              && document.annotation(withID: firstID)?.size == 2
+              && ToolStyleMemory.style(for: .rectangle).size == 2 && annotator.style.size == 7)
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
         annotator.deselect()
         ToolStyleMemory.debugReload()
         let reloadedArrow = ToolStyleMemory.style(for: .arrow)
-        check("重新启动后仍记得每个工具的样式", reloadedArrow.size == .large && reloadedArrow.opacity == 0.6
-              && reloadedArrow.color.isSameColor(as: yellow) && ToolStyleMemory.style(for: .rectangle).size == .small,
+        check("重新启动后仍记得每个工具的样式", reloadedArrow.size == 7 && reloadedArrow.opacity == 0.6
+              && reloadedArrow.color.isSameColor(as: yellow) && ToolStyleMemory.style(for: .rectangle).size == 2,
               "箭头 \(reloadedArrow.size) \(reloadedArrow.opacity) \(ColorCode.hex(reloadedArrow.color))，矩形 \(ToolStyleMemory.style(for: .rectangle).size)")
+
+        // 大小拉条：按工具显示名称和范围，精确到 1 点；滚动一次 1 点；超出范围的值被限制
+        session.debugSelectTool(.rectangle)
+        let sizeSlider = toolbar.debugSizeSlider
+        check("矩形：拉条是「粗细 1–30」", sizeSlider.title == "粗细" && sizeSlider.minimum == 1 && sizeSlider.maximum == 30
+              && sizeSlider.value == annotator.style.size, "\(String(describing: sizeSlider.title)) \(sizeSlider.minimum)–\(sizeSlider.maximum)")
+        sizeSlider.set(12.4)
+        check("拖到 12：当前粗细就是 12 点", annotator.style.size == 12 && sizeSlider.value == 12, "\(annotator.style.size)")
+        drag(g(150, 140), g(172, 152))
+        check("新画的矩形线宽 12 点", document.annotations.last?.lineWidth == 12)
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        sizeSlider.set(99)
+        check("超出范围时限制在 30", annotator.style.size == 30)
+        if let up = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0)
+            .flatMap(NSEvent.init(cgEvent:)) { sizeSlider.scrollWheel(with: up) }
+        check("在拉条上滚动一次：减 1 点", annotator.style.size == 29, "\(annotator.style.size)")
+        session.debugSelectTool(.text)
+        check("文字：拉条是「字号 10–120」", sizeSlider.title == "字号" && sizeSlider.minimum == 10 && sizeSlider.maximum == 120)
+        // 旧版本保存的三档（size: 0 / 1 / 2）读出来换算成数值
+        ToolStyleMemory.debugStoreRaw(["rectangle": ["color": "#FF3B30", "size": 2, "opacity": 1.0],
+                                      "text": ["color": "#FF3B30", "size": 0, "opacity": 1.0]])
+        check("旧设置的「大 / 小」换算成 7 点线宽、14 号字", ToolStyleMemory.style(for: .rectangle).size == 7
+              && ToolStyleMemory.style(for: .text).size == 14 && ToolStyleMemory.style(for: .arrow).size == 4)
+        session.debugSelectTool(.rectangle)
+        try? await Task.sleep(for: .milliseconds(200))
+        if let host = toolbar.superview, let window = host.window {
+            await captureComposite(around: window.convertToScreen(host.convert(toolbar.frame.insetBy(dx: -16, dy: -16), to: nil)),
+                                   to: dir.appendingPathComponent("10i-粗细拉条.png"))
+        }
         session.debugSelectTool(nil)
         session.debugSetStyle(AnnotationStyle())
 

@@ -117,6 +117,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // 菜单里的快捷键只做显示，真正的全局快捷键由 HotkeyManager 注册
         let shotKey = CaptureCoordinator.shared.screenshotHotkey
         let recordKey = CaptureCoordinator.shared.recordingHotkey
+        let translateKey = CaptureCoordinator.shared.translateHotkey
         let recordingState = RecordingManager.shared.state
 
         if recordingState == .recording || recordingState == .paused {
@@ -133,18 +134,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let record = addItem("录屏", action: #selector(startRecording),
                              key: recordKey.menuKeyEquivalent, modifiers: recordKey.cocoaModifiers)
         record.isEnabled = recordingState == .idle
+        addItem("截屏翻译", action: #selector(startTranslate),
+                key: translateKey.menuKeyEquivalent, modifiers: translateKey.cocoaModifiers)
 
-        for (action, key) in [(HotkeyManager.Action.screenshot, shotKey), (.recording, recordKey)]
+        for (action, key) in [(HotkeyManager.Action.screenshot, shotKey), (.recording, recordKey), (.translate, translateKey)]
         where HotkeyManager.shared.failedActions.contains(action) {
             let warning = addItem("快捷键 \(key.displayString) 已被其他程序占用", action: nil)
             warning.isEnabled = false
         }
 
-        addItem("将录屏转为 GIF…", action: #selector(convertToGIF))
-
+        // 转 GIF、打开文件夹都在设置里（录屏 › GIF、通用 › 保存位置）
         menu.addItem(.separator())
-        addItem("打开截图文件夹", action: #selector(openScreenshotFolder))
-        addItem("打开录屏文件夹", action: #selector(openRecordingFolder))
         addItem("设置…", action: #selector(openSettings), key: ",")
         menu.addItem(.separator())
 
@@ -171,6 +171,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         CaptureCoordinator.shared.beginRecording(delay: .milliseconds(150))
     }
 
+    @objc private func startTranslate() {
+        // 等菜单淡出后再冻屏
+        CaptureCoordinator.shared.beginScreenshot(delay: .milliseconds(250), purpose: .translate)
+    }
+
     @objc private func stopRecording() {
         Task { await RecordingManager.shared.stop() }
     }
@@ -179,29 +184,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         RecordingManager.shared.togglePause()
     }
 
-    /// 选一个视频文件，在屏幕角落显示它的缩略图并开始导出 GIF（进度显示在缩略图上）
-    @objc private func convertToGIF() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie]
-        panel.allowsMultipleSelection = false
-        panel.prompt = "转为 GIF"
-        panel.message = "选择要转为 GIF 的录屏（GIF 会保存在视频旁边）"
-        panel.directoryURL = SaveLocation.directory(for: .recording)
-        NSApp.activate()
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await ThumbnailManager.shared.showRecording(url, on: nil, exportGIF: true) }
-    }
-
     @objc private func showPermissions() {
         OnboardingWindowController.show()
-    }
-
-    @objc private func openScreenshotFolder() {
-        SaveLocation.revealInFinder(.screenshot)
-    }
-
-    @objc private func openRecordingFolder() {
-        SaveLocation.revealInFinder(.recording)
     }
 
     @objc private func openSettings() {

@@ -107,7 +107,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         default:
             break
         }
-        // 控制点：白色圆点 + 蓝色描边，和截图选区的控制点一样
+        // 控制点：白色圆点 + 杏色描边，和截图选区的控制点一样
         let d = 8 * u
         ctx.setLineWidth(1.5 * u)
         ctx.setFillColor(NSColor.white.cgColor)
@@ -462,7 +462,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
 
     private func beginTextEditing(at point: CGPoint) {
         guard let hostView else { return }
-        let fontSize = Annotation.fontSize(for: style.size)
+        let fontSize = style.size
         let textView = NSTextView(frame: CGRect(x: point.x, y: point.y - fontSize * 1.3, width: 40, height: fontSize * 1.3))
         textView.delegate = self
         textView.isRichText = false
@@ -490,7 +490,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
 
     private func applyStyleToTextView() {
         guard let textView else { return }
-        let attributes = Annotation.textAttributes(color: style.color, fontSize: Annotation.fontSize(for: style.size))
+        let attributes = Annotation.textAttributes(color: style.color, fontSize: style.size)
         textView.typingAttributes = attributes
         textView.textStorage?.setAttributes(attributes, range: NSRange(location: 0, length: textView.string.utf16.count))
         textView.insertionPointColor = style.color
@@ -502,7 +502,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         guard let textView, let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container).size
-        let lineHeight = Annotation.textFont(size: Annotation.fontSize(for: style.size)).boundingRectForFont.height
+        let lineHeight = Annotation.textFont(size: style.size).boundingRectForFont.height
         let size = CGSize(width: max(ceil(used.width) + 4, 20), height: max(ceil(used.height), ceil(lineHeight)))
         textView.frame = CGRect(x: textTopLeft.x, y: textTopLeft.y - size.height, width: size.width, height: size.height)
     }

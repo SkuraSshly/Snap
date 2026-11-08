@@ -31,6 +31,17 @@ struct GeneralSettingsView: View {
                 SettingsRow(icon: "mic.fill", tint: .chipRose, title: "麦克风", caption: "可选，只在录制麦克风时使用") {
                     StatusBadge(ok: permissions.microphoneGranted, text: permissions.microphoneGranted ? "已授权" : "未授权")
                 }
+                SettingsRow(icon: "hand.raised.fill", tint: .chipHoney, title: "辅助功能",
+                            caption: "可选，长截图的自动滚动、滚动限速需要") {
+                    HStack(spacing: 8) {
+                        if !permissions.accessibilityGranted {
+                            Button("去允许") { permissions.requestAccessibility() }
+                                .buttonStyle(WarmButtonStyle())
+                        }
+                        StatusBadge(ok: permissions.accessibilityGranted,
+                                    text: permissions.accessibilityGranted ? "已授权" : "未授权")
+                    }
+                }
                 SettingsRow(icon: "lock.shield", tint: .chipSage, title: "权限设置", caption: "查看授权步骤，或重新授权") {
                     Button("打开…") { OnboardingWindowController.show(over: SettingsWindowController.currentWindow) }
                         .buttonStyle(WarmButtonStyle())
@@ -42,6 +53,10 @@ struct GeneralSettingsView: View {
         .onAppear {
             permissions.refresh()
             launchAtLogin.refresh()
+        }
+        // 从系统设置授权回来：重新读取权限状态
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            permissions.refresh()
         }
     }
 
@@ -76,6 +91,9 @@ struct FolderRow: View {
                     Button("恢复默认") { path = SaveLocation.defaultDirectory(for: kind).path }
                         .buttonStyle(WarmButtonStyle())
                 }
+                Button("打开") { SaveLocation.revealInFinder(kind) }
+                    .buttonStyle(WarmButtonStyle())
+                    .help("在访达中打开\(kind.title)文件夹")
                 Button("更改…", action: choose)
                     .buttonStyle(WarmButtonStyle())
             }

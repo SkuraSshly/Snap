@@ -55,8 +55,13 @@ struct RecordingSettingsView: View {
             }
 
             SettingsSection(title: "GIF",
-                            footer: "在录屏缩略图上点「GIF」，或菜单栏「将录屏转为 GIF…」。GIF 最多 256 色，适合界面演示。") {
-                SettingsRow(icon: "photo.stack", tint: .chipLavender, title: "帧率", isFirst: true) {
+                            footer: "刚录完的录屏，在缩略图上点「GIF」；以前的录屏用上面的「选择录屏…」。GIF 最多 256 色，适合界面演示。") {
+                SettingsRow(icon: "film.stack", tint: .coral, title: "将录屏转为 GIF",
+                            caption: "GIF 保存在视频旁边，进度显示在屏幕角落的缩略图上", isFirst: true) {
+                    Button("选择录屏…") { GIFConversion.chooseAndConvert() }
+                        .buttonStyle(WarmButtonStyle())
+                }
+                SettingsRow(icon: "photo.stack", tint: .chipLavender, title: "帧率") {
                     WarmSegmented(options: GIFFrameRate.allCases.map { ($0, $0.title) }, selection: $prefs.gifFrameRate,
                                   segmentWidth: 58)
                 }

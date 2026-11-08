@@ -43,10 +43,17 @@ enum ScrollAxis: Sendable {
 /// 长截图拼接：每来一帧选区的新画面，算出页面相对上一帧滚动了多少，把新露出来的部分接到结果后面。
 ///
 /// 做法：
-/// - 每一行（横向滚动时是每一列）算一个指纹（像素哈希），纯色的行不参与比较（空白处到处都一样，会误判）
+/// - 每一行（横向滚动时是每一列）算一个指纹（像素哈希），纯色的行不参与比较（空白处到处都一样，会误判）。
+///   两侧边缘一小条不参与：滚动时 macOS 会在右侧浮出滚动条、并且跟着移动，算进去会让每一行都对不上
 /// - 新帧的每一行去上一帧里找指纹相同的行，按「位置差」投票，票最多、且重叠部分核对得上的就是滚动距离
-/// - 底部固定不动的部分（聊天输入框、底部工具栏）：在原位置不变、又和滚动后的内容对不上的行，
-///   拼接时排除，最后只在末尾接一次；顶部固定的部分（标题栏）只来自第一帧，不影响拼接
+/// - 像素不完全一致时（有的 App 滚动时文字抗锯齿、图片缩放有细微差别）：每行再记一个亮度轮廓（分 16 段的平均亮度），
+///   找轮廓最接近的位置；有滚轮提供的大致滚动量时只在它附近找。附近有几个差不多像的位置时不冒险，算对不上
+/// - 左右不动的边栏（例如聊天软件的会话列表）：第一次滚动时比较前后两帧，找出真正在滚动的那一段，
+///   只用这一段比对、拼接；边栏只保留第一帧的样子，往下延伸的部分用边栏自己的背景色填满，不会一段段重复
+/// - 顶部、底部固定不动的部分（标题栏、聊天输入框）：在原位置不变、又和滚动后的内容对不上的行。
+///   顶部的只来自第一帧，底部的最后只在末尾接一次
+/// - 还在选区里的内容，每来一帧就用最新的画面覆盖：快速滚动时刚露出来的部分常常还没画完（空白、模糊），
+///   等它画好了会自动换成画好的样子；滚出选区后才定下来
 /// - 往回滚：只移动当前位置，不重复拼接；再往下滚到没拼过的地方才继续接
 /// - 一次滚得太远（新旧画面没有重叠）：对不上，提示用户往回滚一点，回到能对上的位置后继续
 /// - 长度有上限，避免占用过多内存
@@ -69,6 +76,8 @@ struct ScrollStitcher {
     let axis: ScrollAxis
     /// 沿滚动方向的最大长度（像素）
     let maxLength: Int
+    /// 比对时不看的两侧边缘（像素，沿每一行的方向）：前面一小条、后面一条（滚动条）
+    let edgeMargin: (leading: Int, trailing: Int)
 
     /// 拼好的长度（像素，沿滚动方向，含末尾固定部分）
     var length: Int { isMoving ? committedEnd + footerLength : (first.map { lineCount($0) } ?? 0) }
@@ -76,7 +85,7 @@ struct ScrollStitcher {
     var isMoving: Bool { first == nil && last != nil }
     private(set) var reachedLimit = false
 
-    /// 还没滚动过时的第一帧（第一次滚动时才知道底部固定部分有多高，再把它切好放进结果）
+    /// 还没滚动过时的第一帧（第一次滚动时才知道顶部、底部固定部分有多高，再把它切好放进结果）
     private var first: PixelFrame?
     /// 上一帧和它每一行的指纹
     private var last: PixelFrame?
@@ -85,17 +94,20 @@ struct ScrollStitcher {
     private var position = 0
     /// 已经拼好的内容的末尾位置（不含末尾固定部分）
     private var committedEnd = 0
+    /// 顶部固定部分的长度（第一次滚动时定下来）
+    private var headerLength = 0
     /// 末尾固定部分的长度（按最近一次滚动算）
     private var footerLength = 0
-    /// 拼好的内容：一段一段（竖向是若干行，横向是若干列）
-    private(set) var strips: [Strip] = []
-
-    struct Strip: @unchecked Sendable {
-        /// 沿滚动方向的长度（像素）
-        let length: Int
-        /// 紧凑的 BGRA 数据：竖向 length 行 × 宽度；横向 高度行 × length 列
-        let data: Data
-    }
+    /// 拼好的内容：一行接一行（横向时是一列接一列，每列的像素连续存放），每行 cross × 4 字节
+    private var content = Data()
+    /// 一行有多少像素（竖向是宽度，横向是高度）
+    private var cross = 0
+    /// 真正在滚动的那一段（沿每一行，像素）；nil 表示整行都在滚动
+    private var band: Range<Int>?
+    /// 已经找过滚动的那一段（第一次滚动时找，之后不再变）
+    private var bandResolved = false
+    /// 边栏往下延伸的部分用的颜色：每个位置一个（边栏的背景色）
+    private var sideFill: [UInt32] = []
 
     private struct Line: Equatable {
         let hash: UInt64
@@ -103,42 +115,85 @@ struct ScrollStitcher {
         let flat: Bool
     }
 
-    init(axis: ScrollAxis, maxLength: Int = 20_000) {
+    /// 亮度轮廓：每行分成 16 段，每段的平均亮度（0~255），容差比对用。只在精确比对失败时才算
+    private typealias Profile = SIMD16<Float>
+    /// 上一帧的亮度轮廓（算过就留着，换帧时清掉）
+    private var lastProfiles: [Profile]?
+
+    init(axis: ScrollAxis, maxLength: Int = 20_000, edgeMargin: (leading: Int, trailing: Int) = (0, 0)) {
         self.axis = axis
         self.maxLength = maxLength
+        self.edgeMargin = edgeMargin
     }
 
     // MARK: - 加入一帧
 
+    /// - Parameter hint: 滚轮提供的大致滚动量（像素，往前为正），从上一次对上的帧算起；没有时为 nil
     @discardableResult
-    mutating func add(_ frame: PixelFrame) -> Event {
-        let lines = Self.lines(of: frame, axis: axis)
+    mutating func add(_ frame: PixelFrame, hint: Int? = nil) -> Event {
+        var lines = Self.lines(of: frame, axis: axis, span: span(for: frame))
         guard let previous = last else {
             first = frame
             last = frame
             lastLines = lines
+            lastProfiles = nil
+            cross = axis == .vertical ? frame.width : frame.height
             return .started
         }
         guard previous.width == frame.width, previous.height == frame.height else { return .lost }
         if reachedLimit { return .limitReached }
 
-        guard let shift = Self.shift(from: lastLines, to: lines) else {
+        // 还没滚动过：画面变了的话，看是不是只有一段在滚动（两侧是不动的边栏）；是的话以后只用这一段
+        if !bandResolved, first != nil, let changed = Self.changedSpan(previous, frame, axis: axis) {
+            let full = lineCrossCount(frame)
+            if changed.count >= full * 15 / 100, changed.count <= full * 95 / 100 {
+                band = changed
+                let bandPrevious = Self.lines(of: previous, axis: axis, span: span(for: previous))
+                let bandCurrent = Self.lines(of: frame, axis: axis, span: span(for: frame))
+                if let d = Self.shift(from: bandPrevious, to: bandCurrent), d != 0 {
+                    bandResolved = true
+                    lastLines = bandPrevious
+                    lastProfiles = nil
+                    lines = bandCurrent
+                    sideFill = Self.sideFill(of: previous, axis: axis, band: changed)
+                } else {
+                    band = nil   // 认不出来：照旧整行处理
+                }
+            }
+        }
+
+        var shift = Self.shift(from: lastLines, to: lines)
+        var profiles: [Profile]?
+        if shift == nil {
+            // 像素对不上：用亮度轮廓再找一次
+            let previousProfiles = lastProfiles ?? Self.profiles(of: previous, axis: axis, span: span(for: previous))
+            lastProfiles = previousProfiles
+            profiles = Self.profiles(of: frame, axis: axis, span: span(for: frame))
+            shift = Self.tolerantShift(previous: (lastLines, previousProfiles), current: (lines, profiles!), hint: hint)
+        }
+        guard let shift else {
             // 对不上：保留上一帧，等用户滚回能对上的位置
             return Self.mostlySame(lastLines, lines) ? .unchanged : .lost
         }
         if shift == 0 {
-            // 画面有局部变化，但没有滚动：更新上一帧（例如动图换了一帧）
+            // 画面有局部变化，但没有滚动：更新上一帧（例如动图换了一帧、刚露出的部分画好了）
+            refresh(from: frame)
             last = frame
             lastLines = lines
+            lastProfiles = profiles
             return .unchanged
         }
 
+        bandResolved = true
         let n = lines.count
         footerLength = Self.footer(previous: lastLines, current: lines, shift: shift)
         let scrollEnd = n - footerLength
         if let firstFrame = first {
-            // 第一次滚动：第一帧去掉末尾固定部分，作为开头
-            strips = [Self.strip(of: firstFrame, axis: axis, range: 0..<scrollEnd)]
+            // 第一次滚动：第一帧去掉末尾固定部分，作为开头；顶部固定部分以后不再覆盖
+            headerLength = min(Self.header(previous: lastLines, current: lines, shift: shift), scrollEnd)
+            content = Data()
+            content.reserveCapacity(scrollEnd * cross * 4 * 4)
+            Self.copy(firstFrame, axis: axis, lines: 0..<scrollEnd, into: &content, at: 0)
             committedEnd = scrollEnd
             position = 0
             first = nil
@@ -146,6 +201,8 @@ struct ScrollStitcher {
         position += shift
         last = frame
         lastLines = lines
+        lastProfiles = profiles
+        refresh(from: frame)
 
         // 当前帧露出了已拼好的末尾之后的内容：接上
         let start = max(0, committedEnd - position)
@@ -157,69 +214,63 @@ struct ScrollStitcher {
             reachedLimit = true
         }
         guard !range.isEmpty else { return .limitReached }
-        strips.append(Self.strip(of: frame, axis: axis, range: range))
+        Self.copy(frame, axis: axis, lines: range, into: &content, at: committedEnd, only: band,
+                  fill: band == nil ? nil : sideFill)
         committedEnd += range.count
         return reachedLimit ? .limitReached : .appended(range.count)
     }
 
+    /// 用当前帧覆盖已拼好、仍在选区里的那部分内容（顶部、底部固定部分除外）
+    private mutating func refresh(from frame: PixelFrame) {
+        guard first == nil else { return }
+        let n = lineCount(frame)
+        // 当前帧第 i 行 = 内容第 position + i 行
+        let low = max(headerLength, position + headerLength)
+        let high = min(committedEnd, position + n - footerLength)
+        guard low < high else { return }
+        // 只覆盖滚动的那一段：边栏保持第一帧的样子
+        Self.copy(frame, axis: axis, lines: (low - position)..<(high - position), into: &content, at: low, only: band)
+    }
+
+    private func lineCrossCount(_ frame: PixelFrame) -> Int { axis == .vertical ? frame.width : frame.height }
+
+    /// 比对时看每一行的哪一段：滚动的那一段（没有边栏时是整行），再去掉两侧边缘（只在足够长时才去掉）
+    private func span(for frame: PixelFrame) -> Range<Int> {
+        let base = band ?? 0..<lineCrossCount(frame)
+        guard base.count > (edgeMargin.leading + edgeMargin.trailing) * 4 else { return base }
+        return (base.lowerBound + edgeMargin.leading)..<(base.upperBound - edgeMargin.trailing)
+    }
+
     // MARK: - 结果
 
-    /// 拼好的整张图：开头 + 中间接上的各段 + 末尾固定部分（来自最后一帧）
+    /// 拼好的整张图：开头 + 中间接上的部分 + 末尾固定部分（来自最后一帧）
     func makeImage() -> CGImage? {
         guard let last else { return nil }
         if let first { return Self.image(of: first) }
-        var parts = strips
+        var all = content
         if footerLength > 0 {
-            parts.append(Self.strip(of: last, axis: axis, range: (lineCount(last) - footerLength)..<lineCount(last)))
+            let n = lineCount(last)
+            Self.copy(last, axis: axis, lines: (n - footerLength)..<n, into: &all, at: committedEnd)
         }
-        let total = parts.reduce(0) { $0 + $1.length }
-        let crossLength = axis == .vertical ? last.width : last.height
-        let width = axis == .vertical ? crossLength : total
-        let height = axis == .vertical ? total : crossLength
-        let bytesPerRow = width * 4
-        var data = Data(count: bytesPerRow * height)
-        data.withUnsafeMutableBytes { out in
-            guard let dst = out.baseAddress else { return }
-            var offset = 0
-            for part in parts {
-                part.data.withUnsafeBytes { src in
-                    guard let s = src.baseAddress else { return }
-                    switch axis {
-                    case .vertical:
-                        // 竖向：整段行直接接在后面
-                        memcpy(dst + offset * bytesPerRow, s, part.data.count)
-                    case .horizontal:
-                        // 横向：每一行里，把这一段的列接在后面
-                        let segment = part.length * 4
-                        for y in 0..<height {
-                            memcpy(dst + y * bytesPerRow + offset * 4, s + y * segment, segment)
-                        }
-                    }
-                }
-                offset += part.length
-            }
-        }
-        return Self.makeCGImage(width: width, height: height, bytesPerRow: bytesPerRow, data: data, colorSpace: last.colorSpace)
+        return Self.image(lines: all, count: committedEnd + footerLength, cross: cross, axis: axis, colorSpace: last.colorSpace)
     }
 
-    /// 预览用：已拼好的各段（每段一张小图，不复制像素）
-    func previewParts() -> [CGImage] {
-        if let first { return Self.image(of: first).map { [$0] } ?? [] }
+    /// 预览用：拼好的内容最后 maxLines 行（不含末尾固定部分），一张图
+    func previewParts(maxLines: Int = 3000) -> [CGImage] {
         guard let last else { return [] }
-        let cross = axis == .vertical ? last.width : last.height
-        return strips.compactMap { strip in
-            axis == .vertical
-                ? Self.makeCGImage(width: cross, height: strip.length, bytesPerRow: cross * 4, data: strip.data, colorSpace: last.colorSpace)
-                : Self.makeCGImage(width: strip.length, height: cross, bytesPerRow: strip.length * 4, data: strip.data, colorSpace: last.colorSpace)
-        }
+        if let first { return Self.image(of: first).map { [$0] } ?? [] }
+        let count = min(committedEnd, maxLines)
+        let lineBytes = cross * 4
+        let tail = content.subdata(in: (committedEnd - count) * lineBytes..<committedEnd * lineBytes)
+        return Self.image(lines: tail, count: count, cross: cross, axis: axis, colorSpace: last.colorSpace).map { [$0] } ?? []
     }
 
     private func lineCount(_ frame: PixelFrame) -> Int { axis == .vertical ? frame.height : frame.width }
 
     // MARK: - 指纹
 
-    /// 每一行（或每一列）的指纹。像素按 32 位整数读，FNV-1a 哈希；同时判断是不是纯色
-    private static func lines(of frame: PixelFrame, axis: ScrollAxis) -> [Line] {
+    /// 每一行（或每一列）的指纹。像素按 32 位整数读，FNV-1a 哈希；同时判断是不是纯色。两侧边缘不算
+    private static func lines(of frame: PixelFrame, axis: ScrollAxis, span: Range<Int>) -> [Line] {
         let w = frame.width, h = frame.height, bpr = frame.bytesPerRow
         let offsetBasis: UInt64 = 0xcbf2_9ce4_8422_2325, prime: UInt64 = 0x0000_0100_0000_01b3
         return frame.data.withUnsafeBytes { raw -> [Line] in
@@ -235,11 +286,12 @@ struct ScrollStitcher {
             }
             switch axis {
             case .vertical:
+                let xs = span
                 return (0..<h).map { y in
                     var hash = offsetBasis
-                    let firstPixel = pixel(0, y)
+                    let firstPixel = pixel(xs.lowerBound, y)
                     var flat = true
-                    for x in 0..<w {
+                    for x in xs {
                         let p = pixel(x, y)
                         hash = (hash ^ UInt64(p)) &* prime
                         if flat, p != firstPixel, !near(p, firstPixel) { flat = false }
@@ -248,10 +300,11 @@ struct ScrollStitcher {
                 }
             case .horizontal:
                 // 按行遍历、同时更新每一列的哈希（顺序读内存，比逐列跳着读快）
+                let ys = span
                 var hashes = [UInt64](repeating: offsetBasis, count: w)
                 var flat = [Bool](repeating: true, count: w)
-                let firstRow = (0..<w).map { pixel($0, 0) }
-                for y in 0..<h {
+                let firstRow = (0..<w).map { pixel($0, ys.lowerBound) }
+                for y in ys {
                     for x in 0..<w {
                         let p = pixel(x, y)
                         hashes[x] = (hashes[x] ^ UInt64(p)) &* prime
@@ -260,6 +313,42 @@ struct ScrollStitcher {
                 }
                 return (0..<w).map { Line(hash: hashes[$0], flat: flat[$0]) }
             }
+        }
+    }
+
+    /// 每一行（或每一列）的亮度轮廓。隔一个像素取一个（容差比对用不着每个像素），两侧边缘不算
+    private static func profiles(of frame: PixelFrame, axis: ScrollAxis, span: Range<Int>) -> [Profile] {
+        let w = frame.width, h = frame.height, bpr = frame.bytesPerRow
+        return frame.data.withUnsafeBytes { raw -> [Profile] in
+            guard let base = raw.baseAddress else { return [] }
+            // 亮度（近似 0.25 R + 0.625 G + 0.125 B）
+            func luma(_ x: Int, _ y: Int) -> Float {
+                let p = base.loadUnaligned(fromByteOffset: y * bpr + x * 4, as: UInt32.self)
+                return Float(((p >> 16) & 0xff) * 2 + ((p >> 8) & 0xff) * 5 + (p & 0xff)) / 8
+            }
+            // 沿一行（去掉边缘后长度 count）分 16 段，每段隔一个像素取样
+            let offset = span.lowerBound
+            let count = span.count
+            let segments: [(start: Int, end: Int)] = (0..<16).map {
+                (offset + $0 * count / 16, offset + max($0 * count / 16 + 1, ($0 + 1) * count / 16))
+            }
+            let lines = axis == .vertical ? h : w
+            var result = [Profile](repeating: Profile(), count: lines)
+            for line in 0..<lines {
+                var profile = Profile()
+                for (b, segment) in segments.enumerated() {
+                    var sum: Float = 0, samples: Float = 0
+                    var k = segment.start
+                    while k < min(segment.end, offset + count) {
+                        sum += axis == .vertical ? luma(k, line) : luma(line, k)
+                        samples += 1
+                        k += 2
+                    }
+                    profile[b] = samples > 0 ? sum / samples : 0
+                }
+                result[line] = profile
+            }
+            return result
         }
     }
 
@@ -285,6 +374,70 @@ struct ScrollStitcher {
             if verify(previous, current, shift: d) { return d }
         }
         return mostlySame(previous, current) ? 0 : nil
+    }
+
+    /// 容差比对：像素不完全一致时，找亮度轮廓最接近的滚动距离。
+    /// 有滚轮提示时只在提示附近找（快、也不容易被重复的花纹骗），否则在所有可能的距离里找。
+    /// 最好的位置要足够像（每段平均相差不超过 4 级亮度），而且明显比其他位置像，否则返回 nil
+    private static func tolerantShift(previous: (lines: [Line], profiles: [Profile]), current: (lines: [Line], profiles: [Profile]),
+                                      hint: Int?) -> Int? {
+        let n = current.lines.count
+        guard n == previous.lines.count, n == current.profiles.count, n == previous.profiles.count else { return nil }
+        let minOverlap = max(8, n / 8)
+        let limit = n - minOverlap
+        guard limit > 0 else { return nil }
+        var candidates = -limit...limit
+        if let hint {
+            let window = max(48, abs(hint) / 2)
+            let low = max(-limit, hint - window), high = min(limit, hint + window)
+            if low <= high { candidates = low...high }
+        }
+        let cur = current.profiles, prev = previous.profiles
+        func distance(_ a: Profile, _ b: Profile) -> Float {
+            let d = a - b
+            return d.replacing(with: -d, where: d .< 0).sum() / 16
+        }
+        // 没滚动、只有细微差别（每行和原位置几乎一样）：当作没滚动
+        let usable = (0..<n).filter { !current.lines[$0].flat }
+        guard !usable.isEmpty else { return 0 }
+        let still = usable.reduce(Float(0)) { $0 + distance(cur[$1], prev[$1]) } / Float(usable.count)
+        if still <= 1.5 { return 0 }
+        // 两帧里原位置几乎没变的行：固定的标题栏、输入框，不参与比对
+        let fixed = (0..<n).map { distance(cur[$0], prev[$0]) <= 1.5 }
+
+        // 每行都用太慢：行多时隔一行取一行
+        let step = n > 600 ? 2 : 1
+        func cost(_ d: Int) -> Float? {
+            var total: Float = 0, count = 0
+            var i = max(0, -d)
+            let end = min(n, n - d)
+            while i < end {
+                if !current.lines[i].flat, !fixed[i], !fixed[i + d] {
+                    total += distance(cur[i], prev[i + d])
+                    count += 1
+                }
+                i += step
+            }
+            return count >= max(3, (end - max(0, -d)) / (10 * step)) ? total / Float(count) : nil
+        }
+        var best: (d: Int, cost: Float)?
+        var second: Float = .infinity
+        for d in candidates where d != 0 {
+            guard let c = cost(d) else { continue }
+            if let b = best {
+                if c < b.cost {
+                    // 原来最好的成了第二好（隔得近的算同一个位置附近，不算）
+                    if abs(d - b.d) > 2 { second = min(second, b.cost) }
+                    best = (d, c)
+                } else if abs(d - b.d) > 2 {
+                    second = min(second, c)
+                }
+            } else {
+                best = (d, c)
+            }
+        }
+        guard let best, best.cost <= 4, second >= best.cost * 1.6 + 0.5 else { return nil }
+        return best.d
     }
 
     /// 核对：重叠部分里，参与比较的行至少 85% 对得上。不参与比较的：纯色行；
@@ -321,32 +474,129 @@ struct ScrollStitcher {
         return n - start
     }
 
+
+    /// 顶部固定部分的长度：从开头往后，原位置不变的那一段里，最靠后的一行「确定是固定的」就是固定部分的结尾。最多占一半
+    private static func header(previous: [Line], current: [Line], shift d: Int) -> Int {
+        let n = current.count
+        var end = 0
+        var i = 0
+        while i < n / 2, current[i] == previous[i] {
+            let movesToo = i + d >= 0 && i + d < n && current[i] == previous[i + d]
+            if !movesToo { end = i + 1 }
+            i += 1
+        }
+        return end
+    }
+
     // MARK: - 像素
 
-    /// 从一帧里取出一段（竖向是几行，横向是几列），复制成紧凑的数据
-    private static func strip(of frame: PixelFrame, axis: ScrollAxis, range: Range<Int>) -> Strip {
+    /// 把一帧里的若干行（横向时是若干列）复制到内容的第 at 行起（覆盖或接在末尾）
+    /// - Parameters:
+    ///   - only: 只复制每一行的这一段（滚动的那一段）；nil 表示整行
+    ///   - fill: 和 only 一起用：这一段以外填这些颜色（边栏往下延伸的部分）；nil 表示不动原来的内容
+    private static func copy(_ frame: PixelFrame, axis: ScrollAxis, lines range: Range<Int>, into content: inout Data, at index: Int,
+                             only: Range<Int>? = nil, fill: [UInt32]? = nil) {
+        guard !range.isEmpty else { return }
+        let cross = axis == .vertical ? frame.width : frame.height
+        let lineBytes = cross * 4
+        let needed = (index + range.count) * lineBytes
+        if content.count < needed { content.append(Data(count: needed - content.count)) }
         let bpr = frame.bytesPerRow
+        let part = only ?? 0..<cross
+        content.withUnsafeMutableBytes { out in
+            frame.data.withUnsafeBytes { src in
+                guard let dst = out.baseAddress, let s = src.baseAddress else { return }
+                let out32 = dst.assumingMemoryBound(to: UInt32.self)
+                for (k, line) in range.enumerated() {
+                    let target = out32 + (index + k) * cross
+                    if let fill, fill.count == cross {
+                        fill.withUnsafeBufferPointer { f in
+                            guard let f = f.baseAddress else { return }
+                            target.update(from: f, count: part.lowerBound)
+                            (target + part.upperBound).update(from: f + part.upperBound, count: cross - part.upperBound)
+                        }
+                    }
+                    switch axis {
+                    case .vertical:
+                        memcpy(target + part.lowerBound, s + line * bpr + part.lowerBound * 4, part.count * 4)
+                    case .horizontal:
+                        // 每一列的像素连续存放（转置），拼好后再转回来
+                        for y in part { target[y] = s.loadUnaligned(fromByteOffset: y * bpr + line * 4, as: UInt32.self) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 两帧之间变了的那一段（沿每一行的方向）：竖向时是哪些列有变化，横向时是哪些行有变化；没变化返回 nil
+    private static func changedSpan(_ a: PixelFrame, _ b: PixelFrame, axis: ScrollAxis) -> Range<Int>? {
+        let w = a.width, h = a.height
+        return a.data.withUnsafeBytes { ra -> Range<Int>? in
+            b.data.withUnsafeBytes { rb -> Range<Int>? in
+                guard let pa = ra.baseAddress, let pb = rb.baseAddress else { return nil }
+                var low = Int.max, high = -1
+                for y in 0..<h {
+                    let rowA = pa + y * a.bytesPerRow, rowB = pb + y * b.bytesPerRow
+                    guard memcmp(rowA, rowB, w * 4) != 0 else { continue }
+                    switch axis {
+                    case .horizontal:
+                        low = min(low, y)
+                        high = max(high, y)
+                    case .vertical:
+                        // 只需要找最左、最右变了的列
+                        var x = 0
+                        while x < min(low, w), rowA.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self)
+                                == rowB.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self) { x += 1 }
+                        if x < w { low = min(low, x) }
+                        var r = w - 1
+                        while r > high, rowA.loadUnaligned(fromByteOffset: r * 4, as: UInt32.self)
+                                == rowB.loadUnaligned(fromByteOffset: r * 4, as: UInt32.self) { r -= 1 }
+                        high = max(high, r)
+                    }
+                }
+                return high >= low ? low..<(high + 1) : nil
+            }
+        }
+    }
+
+    /// 边栏的背景色：滚动的那一段以外，每个位置取出现最多的颜色（隔一个像素取样）
+    private static func sideFill(of frame: PixelFrame, axis: ScrollAxis, band: Range<Int>) -> [UInt32] {
+        let cross = axis == .vertical ? frame.width : frame.height
+        let along = axis == .vertical ? frame.height : frame.width
+        return frame.data.withUnsafeBytes { raw -> [UInt32] in
+            guard let base = raw.baseAddress else { return [] }
+            return (0..<cross).map { c in
+                guard !band.contains(c) else { return 0 }
+                var counts: [UInt32: Int] = [:]
+                for k in stride(from: 0, to: along, by: 2) {
+                    let (x, y) = axis == .vertical ? (c, k) : (k, c)
+                    counts[base.loadUnaligned(fromByteOffset: y * frame.bytesPerRow + x * 4, as: UInt32.self), default: 0] += 1
+                }
+                return counts.max { $0.value < $1.value }?.key ?? 0
+            }
+        }
+    }
+
+    /// 内容（count 行，每行 cross 像素）做成图；横向时把按列存放的像素转回按行
+    private static func image(lines data: Data, count: Int, cross: Int, axis: ScrollAxis, colorSpace: CGColorSpace) -> CGImage? {
+        guard count > 0, cross > 0 else { return nil }
         switch axis {
         case .vertical:
-            let rowBytes = frame.width * 4
-            var data = Data(count: rowBytes * range.count)
-            data.withUnsafeMutableBytes { out in
-                frame.data.withUnsafeBytes { src in
-                    guard let dst = out.baseAddress, let s = src.baseAddress else { return }
-                    for (k, y) in range.enumerated() { memcpy(dst + k * rowBytes, s + y * bpr, rowBytes) }
-                }
-            }
-            return Strip(length: range.count, data: data)
+            return makeCGImage(width: cross, height: count, bytesPerRow: cross * 4, data: data.prefix(count * cross * 4),
+                               colorSpace: colorSpace)
         case .horizontal:
-            let segment = range.count * 4
-            var data = Data(count: segment * frame.height)
-            data.withUnsafeMutableBytes { out in
-                frame.data.withUnsafeBytes { src in
-                    guard let dst = out.baseAddress, let s = src.baseAddress else { return }
-                    for y in 0..<frame.height { memcpy(dst + y * segment, s + y * bpr + range.lowerBound * 4, segment) }
+            var rows = Data(count: count * cross * 4)
+            rows.withUnsafeMutableBytes { out in
+                data.withUnsafeBytes { src in
+                    guard let dst = out.baseAddress?.assumingMemoryBound(to: UInt32.self),
+                          let s = src.baseAddress?.assumingMemoryBound(to: UInt32.self) else { return }
+                    for x in 0..<count {
+                        let column = s + x * cross
+                        for y in 0..<cross { dst[y * count + x] = column[y] }
+                    }
                 }
             }
-            return Strip(length: range.count, data: data)
+            return makeCGImage(width: count, height: cross, bytesPerRow: count * 4, data: rows, colorSpace: colorSpace)
         }
     }
 

@@ -10,7 +10,8 @@ final class AnnotationToolbar: NSView {
 
     var onSelectTool: ((AnnotationTool?) -> Void)?
     var onSelectColor: ((NSColor) -> Void)?
-    var onSelectSize: ((SizeLevel) -> Void)?
+    /// 拖大小拉条（点，含义按工具不同）
+    var onSelectSize: ((CGFloat) -> Void)?
     /// 拖不透明度滑块（0.1 ~ 1）
     var onSelectOpacity: ((CGFloat) -> Void)?
     /// 调色盘里选了颜色；opacity 不为 nil 表示颜色代码里带了不透明度（#RRGGBBAA、rgba）
@@ -23,7 +24,7 @@ final class AnnotationToolbar: NSView {
     private var actionButtons: [Action: ToolbarButton] = [:]
     private let doneButton = PillButton(title: "完成", symbol: "checkmark", color: WarmPalette.apricot, help: "完成（Enter）")
     private var colorButtons: [SwatchButton] = []
-    private var sizeButtons: [SizeButton] = []
+    private let sizeSlider = SizeSlider()
     private let propertySeparator = WarmSeparator()
     private let customColorButton = CustomColorButton()
     private let opacitySeparator = WarmSeparator()
@@ -105,7 +106,8 @@ final class AnnotationToolbar: NSView {
         addAction(.pin, symbol: "pin", help: "钉在屏幕上", add: add)
         addAction(.save, symbol: "square.and.arrow.down", help: "保存到文件（⌘S）", add: add)
         if showsLongCapture {
-            addAction(.longCapture, symbol: "arrow.up.and.down.text.horizontal", help: "长截图：滚动页面，截取超出屏幕的内容", add: add)
+            addAction(.longCapture, symbol: "scissors", help: "长截图：滚动页面，截取超出屏幕的内容", add: add)
+            actionButtons[.longCapture]?.setImage(SnapIcons.longCapture)
         }
         separator()
         addAction(.cancel, symbol: "xmark", help: "取消（Esc）", add: add)
@@ -132,12 +134,8 @@ final class AnnotationToolbar: NSView {
         customColorButton.action = { [weak self] in self?.toggleColorPicker() }
         propertyBar.addSubview(customColorButton)
         propertyBar.addSubview(propertySeparator)
-        for level in SizeLevel.allCases {
-            let button = SizeButton(level: level)
-            button.action = { [weak self] in self?.onSelectSize?(level) }
-            propertyBar.addSubview(button)
-            sizeButtons.append(button)
-        }
+        sizeSlider.onChange = { [weak self] value in self?.onSelectSize?(value) }
+        propertyBar.addSubview(sizeSlider)
         propertyBar.addSubview(opacitySeparator)
         opacitySlider.onChange = { [weak self] value in self?.onSelectOpacity?(value) }
         propertyBar.addSubview(opacitySlider)
@@ -219,12 +217,12 @@ final class AnnotationToolbar: NSView {
             propertySeparator.frame = CGRect(x: x + 4, y: Self.padding + 8, width: 1.5, height: Self.buttonSize - 16)
             x += 13
         }
-        for button in sizeButtons {
-            button.isSelected = button.level == style.size
-            button.symbolMode = propertyTool == .text ? .text : .dot
-            button.frame = CGRect(x: x, y: Self.padding, width: Self.buttonSize, height: Self.buttonSize)
-            x += Self.buttonSize + Self.spacing
+        if let propertyTool {
+            sizeSlider.configure(title: propertyTool.sizeTitle, range: propertyTool.sizeRange)
+            sizeSlider.value = style.size
         }
+        sizeSlider.frame = CGRect(x: x, y: Self.padding, width: SizeSlider.width, height: Self.buttonSize)
+        x += SizeSlider.width + Self.spacing
         opacitySeparator.isHidden = !showColors
         opacitySlider.isHidden = !showColors
         if showColors {
@@ -242,6 +240,7 @@ final class AnnotationToolbar: NSView {
     #if DEBUG
     func debugToggleColorPicker() { toggleColorPicker() }
     var debugOpacitySlider: OpacitySlider { opacitySlider }
+    var debugSizeSlider: SizeSlider { sizeSlider }
     var debugCustomColorButton: CustomColorButton { customColorButton }
     var debugPropertyBarVisible: Bool { !propertyBar.isHidden }
     var debugShowsOpacity: Bool { !opacitySlider.isHidden }
@@ -316,29 +315,43 @@ final class CustomColorButton: WarmControl {
 }
 
 /// 不透明度滑块（10% ~ 100%）：左边一条轨道，右边显示百分比
-final class OpacitySlider: WarmControl {
-    static let width: CGFloat = 118
+/// 数值拉条（温暖风格）：[名称] ——●—— 数值。拖动、点按或在上面滚动都能改；按 step 取整
+class ValueSlider: WarmControl {
     var onChange: ((CGFloat) -> Void)?
     var value: CGFloat = 1 { didSet { needsDisplay = true } }
+    var minimum: CGFloat = 0 { didSet { needsDisplay = true } }
+    var maximum: CGFloat = 1 { didSet { needsDisplay = true } }
+    /// 取整的单位（例如 1 点、1%）
+    var step: CGFloat = 1
+    /// 左边的名称（可以没有）
+    var title: String? { didSet { needsDisplay = true } }
+    /// 右边显示的数值文字
+    var format: (CGFloat) -> String = { "\(Int($0.rounded()))" }
 
-    private static let minimum: CGFloat = 0.1
-    private var track: CGRect { CGRect(x: 8, y: bounds.midY - 2, width: bounds.width - 58, height: 4) }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        toolTip = "不透明度"
+    private var titleWidth: CGFloat { title.map { ceil(attributed($0).size().width) + 8 } ?? 0 }
+    private var track: CGRect {
+        CGRect(x: 8 + titleWidth, y: bounds.midY - 2, width: max(10, bounds.width - 58 - titleWidth), height: 4)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
     override func updateAppearance() { needsDisplay = true }
+
+    private func attributed(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: roundedFont(ofSize: 12, weight: .semibold, monospacedDigits: true),
+            .foregroundColor: palette.ink,
+        ])
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let palette = self.palette
         let track = self.track
+        if let title {
+            let label = attributed(title)
+            label.draw(at: CGPoint(x: 8, y: bounds.midY - label.size().height / 2))
+        }
         palette.ink.withAlphaComponent(0.15).setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
-        let fraction = (value - Self.minimum) / (1 - Self.minimum)
+        let fraction = maximum > minimum ? (min(max(value, minimum), maximum) - minimum) / (maximum - minimum) : 0
         let knobX = track.minX + fraction * track.width
         WarmPalette.apricot.setFill()
         NSBezierPath(roundedRect: CGRect(x: track.minX, y: track.minY, width: knobX - track.minX, height: track.height),
@@ -359,10 +372,7 @@ final class OpacitySlider: WarmControl {
             edge.lineWidth = 1.5
             edge.stroke()
         }
-        let label = NSAttributedString(string: "\(Int((value * 100).rounded()))%", attributes: [
-            .font: roundedFont(ofSize: 12, weight: .semibold, monospacedDigits: true),
-            .foregroundColor: palette.ink,
-        ])
+        let label = attributed(format(value))
         let size = label.size()
         label.draw(at: CGPoint(x: bounds.maxX - 6 - size.width, y: bounds.midY - size.height / 2))
     }
@@ -374,23 +384,65 @@ final class OpacitySlider: WarmControl {
 
     override func mouseDragged(with event: NSEvent) { pick(event) }
 
+    /// 在拉条上滚动：每次一格，精确微调
     override func scrollWheel(with event: NSEvent) {
         let delta = event.scrollingDeltaY == 0 ? event.scrollingDeltaX : event.scrollingDeltaY
         guard delta != 0 else { return }
-        set(value + (delta > 0 ? 0.05 : -0.05))
+        set(value + (delta > 0 ? scrollStep : -scrollStep))
     }
+
+    var scrollStep: CGFloat { step }
 
     private func pick(_ event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        set(Self.minimum + (p.x - track.minX) / track.width * (1 - Self.minimum))
+        set(minimum + (p.x - track.minX) / track.width * (maximum - minimum))
     }
 
-    /// 取整到 1%，限制在 10% ~ 100%
+    /// 按 step 取整，限制在范围内；变了才回调
     func set(_ newValue: CGFloat) {
-        let clamped = (min(max(newValue, Self.minimum), 1) * 100).rounded() / 100
+        let stepped = step > 0 ? (newValue / step).rounded() * step : newValue
+        let clamped = min(max(stepped, minimum), maximum)
         guard clamped != value else { return }
         value = clamped
         onChange?(clamped)
+    }
+}
+
+/// 不透明度：10% ~ 100%，取整到 1%，滚动一次 5%
+final class OpacitySlider: ValueSlider {
+    static let width: CGFloat = 118
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        minimum = 0.1
+        maximum = 1
+        step = 0.01
+        value = 1
+        format = { "\(Int(($0 * 100).rounded()))%" }
+        toolTip = "不透明度"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var scrollStep: CGFloat { 0.05 }
+}
+
+/// 大小：粗细 / 宽度 / 字号 / 大小 / 强度（按工具），取整到 1 点，滚动一次 1 点
+final class SizeSlider: ValueSlider {
+    static let width: CGFloat = 168
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        step = 1
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(title: String, range: ClosedRange<CGFloat>) {
+        self.title = title
+        minimum = range.lowerBound
+        maximum = range.upperBound
+        toolTip = "\(title)（\(Int(range.lowerBound))–\(Int(range.upperBound))，可以在上面滚动微调）"
     }
 }
 
@@ -435,47 +487,3 @@ final class SwatchButton: WarmControl {
     }
 }
 
-/// 粗细 / 字号按钮：圆点大小或字母大小表示三档，选中时杏色圆底
-final class SizeButton: WarmControl {
-    enum SymbolMode { case dot, text }
-    let level: SizeLevel
-    var isSelected = false { didSet { needsDisplay = true } }
-    var symbolMode: SymbolMode = .dot { didSet { needsDisplay = true } }
-
-    init(level: SizeLevel) {
-        self.level = level
-        super.init(frame: .zero)
-        toolTip = ["细 / 小", "中", "粗 / 大"][level.rawValue]
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func updateAppearance() { needsDisplay = true }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let palette = self.palette
-        let circle = bounds.insetBy(dx: 1, dy: 1)
-        if isSelected {
-            WarmPalette.apricot.setFill()
-            NSBezierPath(ovalIn: circle).fill()
-        } else if isHovered {
-            palette.hover.setFill()
-            NSBezierPath(ovalIn: circle).fill()
-        }
-        let ink = isSelected ? NSColor.white : palette.ink
-        switch symbolMode {
-        case .dot:
-            let diameter: CGFloat = [5, 9, 13][level.rawValue]
-            ink.setFill()
-            NSBezierPath(ovalIn: CGRect(x: bounds.midX - diameter / 2, y: bounds.midY - diameter / 2,
-                                        width: diameter, height: diameter)).fill()
-        case .text:
-            let attributed = NSAttributedString(string: "A", attributes: [
-                .font: roundedFont(ofSize: [11, 14, 18][level.rawValue], weight: .bold),
-                .foregroundColor: ink,
-            ])
-            let size = attributed.size()
-            attributed.draw(at: CGPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2))
-        }
-    }
-}

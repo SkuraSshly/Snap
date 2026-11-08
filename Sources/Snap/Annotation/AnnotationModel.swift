@@ -38,9 +38,44 @@ enum AnnotationTool: String, CaseIterable {
     var usesColor: Bool { self != .mosaic && self != .blur }
 }
 
-/// 粗细 / 字号 / 强度的三档
-enum SizeLevel: Int, CaseIterable {
-    case small, medium, large
+/// 每种工具的「大小」：属性栏里用拉条精确调整，单位都是点
+extension AnnotationTool {
+    /// 拉条左边的名称
+    var sizeTitle: String {
+        switch self {
+        case .rectangle, .ellipse, .arrow, .line, .pen: "粗细"
+        case .highlighter: "宽度"
+        case .text: "字号"
+        case .counter: "大小"
+        case .mosaic, .blur: "强度"
+        }
+    }
+
+    /// 可调范围：线宽 / 荧光笔宽度 / 字号 / 序号半径 / 马赛克方块边长 / 模糊半径
+    var sizeRange: ClosedRange<CGFloat> {
+        switch self {
+        case .rectangle, .ellipse, .arrow, .line, .pen: 1...30
+        case .highlighter: 6...60
+        case .text: 10...120
+        case .counter: 8...40
+        case .mosaic: 4...40
+        case .blur: 2...40
+        }
+    }
+
+    /// 以前的「小 / 中 / 大」三档对应的数值（中就是默认值；读取旧版本保存的样式时换算）
+    var presetSizes: [CGFloat] {
+        switch self {
+        case .rectangle, .ellipse, .arrow, .line, .pen: [2, 4, 7]
+        case .highlighter: [12, 18, 26]
+        case .text: [14, 20, 28]
+        case .counter: [11, 14, 18]
+        case .mosaic: [6, 10, 16]
+        case .blur: [5, 10, 18]
+        }
+    }
+
+    var defaultSize: CGFloat { presetSizes[1] }
 }
 
 /// 标注颜色：红、黄、绿、蓝、白、黑
@@ -58,7 +93,8 @@ enum AnnotationPalette {
 /// 颜色、粗细和不透明度（每个工具各自记忆，见 ToolStyleMemory）
 struct AnnotationStyle {
     var color: NSColor = AnnotationPalette.colors[0]
-    var size: SizeLevel = .medium
+    /// 大小（点）：含义按工具不同，见 AnnotationTool.sizeTitle
+    var size: CGFloat = AnnotationTool.rectangle.defaultSize
     /// 不透明度 0.1 ~ 1
     var opacity: CGFloat = 1
 }
@@ -84,7 +120,7 @@ enum ToolStyleMemory {
     }()
 
     static func style(for tool: AnnotationTool) -> AnnotationStyle {
-        loaded()[tool] ?? AnnotationStyle()
+        loaded()[tool] ?? AnnotationStyle(size: tool.defaultSize)
     }
 
     static func remember(_ style: AnnotationStyle, for tool: AnnotationTool) {
@@ -92,7 +128,7 @@ enum ToolStyleMemory {
         all[tool] = style
         styles = all
         defaults.set(all.reduce(into: [String: [String: Any]]()) { result, entry in
-            result[entry.key.rawValue] = ["color": ColorCode.hex(entry.value.color), "size": entry.value.size.rawValue,
+            result[entry.key.rawValue] = ["color": ColorCode.hex(entry.value.color), "sizeValue": Double(entry.value.size),
                                           "opacity": Double(entry.value.opacity)]
         }, forKey: key)
     }
@@ -102,12 +138,16 @@ enum ToolStyleMemory {
         var result: [AnnotationTool: AnnotationStyle] = [:]
         for (name, value) in defaults.dictionary(forKey: key) ?? [:] {
             guard let tool = AnnotationTool(rawValue: name), let entry = value as? [String: Any] else { continue }
-            var style = AnnotationStyle()
+            var style = AnnotationStyle(size: tool.defaultSize)
             if let hex = entry["color"] as? String, let parsed = ColorCode.parse(hex) {
                 // 预设颜色用原来的颜色对象（工具栏按它标选中）
                 style.color = AnnotationPalette.colors.first { $0.isSameColor(as: parsed.color) } ?? parsed.color
             }
-            if let size = (entry["size"] as? Int).flatMap(SizeLevel.init(rawValue:)) { style.size = size }
+            if let value = entry["sizeValue"] as? Double {
+                style.size = min(max(CGFloat(value), tool.sizeRange.lowerBound), tool.sizeRange.upperBound)
+            } else if let level = entry["size"] as? Int, tool.presetSizes.indices.contains(level) {
+                style.size = tool.presetSizes[level]   // 旧版本保存的三档
+            }
             if let opacity = entry["opacity"] as? Double { style.opacity = min(max(CGFloat(opacity), 0.1), 1) }
             result[tool] = style
         }
@@ -116,9 +156,18 @@ enum ToolStyleMemory {
     }
 
     #if DEBUG
-    /// 自测用：所有工具设成同一个样式
-    static func debugSetAll(_ style: AnnotationStyle) {
-        for tool in AnnotationTool.allCases { remember(style, for: tool) }
+    /// 自测用：所有工具设成同一个颜色 / 不透明度，大小用各自的第 level 档（0 小、1 中、2 大）
+    static func debugSetAll(_ style: AnnotationStyle, level: Int = 1) {
+        for tool in AnnotationTool.allCases {
+            var each = style
+            each.size = tool.presetSizes[level]
+            remember(each, for: tool)
+        }
+    }
+    /// 自测用：直接写入设置文件里的原始内容（模拟旧版本保存的格式）
+    static func debugStoreRaw(_ raw: [String: [String: Any]]) {
+        defaults.set(raw, forKey: key)
+        styles = nil
     }
     /// 自测用：丢掉内存里的记忆，从设置文件重新读取（模拟重新启动）
     static func debugReload() { styles = nil }
@@ -150,11 +199,12 @@ struct Annotation: Identifiable {
     let id = UUID()
     var shape: Shape
     var color: NSColor
-    var size: SizeLevel
+    /// 大小（点）：线宽 / 荧光笔宽度 / 字号 / 序号半径 / 马赛克方块 / 模糊半径，按工具不同
+    var size: CGFloat
     /// 不透明度 0.1 ~ 1（整个标注一起变淡）。马赛克 / 模糊永远不透明：变淡会露出被遮住的内容
     var opacity: CGFloat = 1
 
-    init(shape: Shape, color: NSColor, size: SizeLevel, opacity: CGFloat = 1) {
+    init(shape: Shape, color: NSColor, size: CGFloat, opacity: CGFloat = 1) {
         self.shape = shape
         self.color = color
         self.size = size
@@ -189,16 +239,15 @@ struct Annotation: Identifiable {
 
     // MARK: - 各工具的尺寸（单位：点）
 
-    var lineWidth: CGFloat { [2, 4, 7][size.rawValue] }
-    var highlighterWidth: CGFloat { [12, 18, 26][size.rawValue] }
-    var fontSize: CGFloat { Self.fontSize(for: size) }
-    var counterRadius: CGFloat { [11, 14, 18][size.rawValue] }
+    // 都直接就是 size：每种标注只用其中一个
+    var lineWidth: CGFloat { size }
+    var highlighterWidth: CGFloat { size }
+    var fontSize: CGFloat { size }
+    var counterRadius: CGFloat { size }
     /// 马赛克方块边长
-    var mosaicBlock: CGFloat { [6, 10, 16][size.rawValue] }
+    var mosaicBlock: CGFloat { size }
     /// 模糊半径（高斯模糊的 sigma）
-    var blurRadius: CGFloat { [5, 10, 18][size.rawValue] }
-
-    static func fontSize(for size: SizeLevel) -> CGFloat { [14, 20, 28][size.rawValue] }
+    var blurRadius: CGFloat { size }
 
     static func textFont(size: CGFloat) -> NSFont {
         NSFont.systemFont(ofSize: size, weight: .semibold)

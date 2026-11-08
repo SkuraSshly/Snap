@@ -2,7 +2,8 @@ import AppKit
 
 extension NSCursor {
     /// 四向移动光标：鼠标在能拖动的标注上时显示。macOS 没有公开的「移动」光标，这里自己画，
-    /// 配合温暖风格：可可色的四个箭头、白色描边（任何背景上都看得清，和系统光标一样）、柔和投影、杏色圆心。
+    /// 配合温暖风格：杏色（主题色）的四个箭头、深一点的杏色细边、白色描边（任何背景上都看得清，和系统光标一样）、
+    /// 柔和投影、可可色圆心。
     /// 用矢量绘制，Retina 屏上自动按像素重画，不会发虚。
     static let snapMove: NSCursor = {
         let side: CGFloat = 26
@@ -14,7 +15,7 @@ extension NSCursor {
         return NSCursor(image: image, hotSpot: CGPoint(x: side / 2, y: side / 2))
     }()
 
-    /// 四个箭头：细杆 + 圆润的三角箭头，中心一个杏色小圆点
+    /// 四个箭头：细杆 + 圆润的三角箭头，中心一个可可色小圆点
     private static func drawMoveArrows(in ctx: CGContext, center c: CGPoint) {
         let shaftHalfWidth: CGFloat = 0.85
         let headBase: CGFloat = 7.4, headTip: CGFloat = 11.2, headHalfWidth: CGFloat = 3.1
@@ -34,7 +35,10 @@ extension NSCursor {
             arrows.addLine(to: p(headBase, headHalfWidth))
             arrows.closeSubpath()
         }
-        let ink = NSColor(srgbRed: 0.30, green: 0.21, blue: 0.15, alpha: 1).cgColor
+        let fill = WarmPalette.apricot.cgColor
+        // 深一点的杏色：箭头的细边，浅色背景上也有清楚的轮廓
+        let edge = NSColor(srgbRed: 0.80, green: 0.42, blue: 0.22, alpha: 1).cgColor
+        let ink = NSColor(srgbRed: 0.33, green: 0.24, blue: 0.18, alpha: 1).cgColor
 
         ctx.setLineJoin(.round)
         ctx.setLineCap(.round)
@@ -46,18 +50,18 @@ extension NSCursor {
         ctx.setStrokeColor(.white)
         ctx.strokePath()
         ctx.restoreGState()
-        // 2. 可可色填充，再描一圈同色细线，让箭头的尖角圆润一点
+        // 2. 杏色填充，再描一圈深杏色细线（尖角也圆润一点）
         ctx.addPath(arrows)
-        ctx.setFillColor(ink)
+        ctx.setFillColor(fill)
         ctx.fillPath()
         ctx.addPath(arrows)
         ctx.setLineWidth(0.7)
-        ctx.setStrokeColor(ink)
+        ctx.setStrokeColor(edge)
         ctx.strokePath()
-        // 3. 中心：白圈里一个杏色圆点
+        // 3. 中心：白圈里一个可可色圆点
         ctx.setFillColor(.white)
         ctx.fillEllipse(in: CGRect(x: c.x - 2.6, y: c.y - 2.6, width: 5.2, height: 5.2))
-        ctx.setFillColor(WarmPalette.apricot.cgColor)
+        ctx.setFillColor(ink)
         ctx.fillEllipse(in: CGRect(x: c.x - 1.7, y: c.y - 1.7, width: 3.4, height: 3.4))
     }
 

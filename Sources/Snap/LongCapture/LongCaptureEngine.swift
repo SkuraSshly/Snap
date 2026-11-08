@@ -1,7 +1,7 @@
 import AppKit
 import ScreenCaptureKit
 
-/// 长截图的采集：用 ScreenCaptureKit 只截选区，每秒最多 15 帧（画面不变时系统不送新帧），
+/// 长截图的采集：用 ScreenCaptureKit 只截选区，按屏幕刷新率截（60 或 120 帧；画面不变时系统不送新帧，空闲不耗电），
 /// 每一帧交给 ScrollStitcher 拼接。拼接在自己的串行队列上做，结果回到主线程通知界面。
 /// - 不截鼠标指针（否则指针会被拼进图里）
 /// - 排除 Snap 自己的所有窗口（选区边框、控制条、预览）
@@ -26,7 +26,14 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private var stream: SCStream?
     /// 只在 queue 上读写
     private var stitcher: ScrollStitcher
+    private var axis: ScrollAxis
     private var generation = 0
+    /// 滚轮提供的滚动量（像素，往前为正），从上一次对上的帧算起；nil 表示不知道（例如用的是普通鼠标滚轮）
+    private var hint: Double? = 0
+    private var scale: CGFloat = 2
+    /// 预览最多每 0.2 秒更新一次（每帧都更新太费：要复制一大段像素）
+    private var previewDirty = false
+    private var lastPreview = ContinuousClock.now
     private var colorSpace: CGColorSpace
 
     /// 最长：沿滚动方向 20000 像素（Retina 屏上约 10000 点），竖向 1600 像素宽时约 128 MB
@@ -34,6 +41,7 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
 
     init(axis: ScrollAxis) {
         stitcher = ScrollStitcher(axis: axis, maxLength: Self.maxLength)
+        self.axis = axis
         colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         super.init()
     }
@@ -61,8 +69,12 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         config.pixelFormat = kCVPixelFormatType_32BGRA
         let spaceName = screen.canRepresent(.p3) ? CGColorSpace.displayP3 : CGColorSpace.sRGB
         config.colorSpaceName = spaceName
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
-        config.queueDepth = 4
+        // 截得越快，相邻两帧之间页面移动得越少，快速滚动也接得上（拼接一帧只要几毫秒，跟得上）
+        let fps = Int32(min(120, max(30, screen.maximumFramesPerSecond)))
+        config.minimumFrameInterval = CMTime(value: 1, timescale: fps)
+        config.queueDepth = 5
+        self.scale = scale
+        stitcher = Self.makeStitcher(axis: axis, scale: scale)
         colorSpace = CGColorSpace(name: spaceName) ?? colorSpace
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
@@ -80,8 +92,28 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     /// 换方向：从头开始拼（下一帧作为新的第一帧）
     func reset(axis: ScrollAxis) {
         queue.async { [self] in
-            stitcher = ScrollStitcher(axis: axis, maxLength: Self.maxLength)
+            self.axis = axis
+            stitcher = Self.makeStitcher(axis: axis, scale: scale)
             generation += 1
+            hint = 0
+        }
+    }
+
+    /// 比对时忽略两侧边缘：前面 4 点；后面 18 点（滚动时浮出的滚动条在这里：竖向在右边，横向在下边）
+    private static func makeStitcher(axis: ScrollAxis, scale: CGFloat) -> ScrollStitcher {
+        ScrollStitcher(axis: axis, maxLength: maxLength,
+                       edgeMargin: (Int((4 * scale).rounded()), Int((18 * scale).rounded())))
+    }
+
+    /// 滚轮滚了多少（点，NSEvent 的 scrollingDelta：正数是往上 / 往左滚）。precise 为 false 时是普通鼠标滚轮的「行」，换算不准，不作提示
+    func addScrollHint(_ points: CGFloat, precise: Bool) {
+        queue.async { [self] in
+            guard precise else {
+                hint = nil
+                return
+            }
+            // 往上滚（正数）= 页面内容往下移 = 拼接方向的负数
+            hint = hint.map { $0 - Double(points * scale) }
         }
     }
 
@@ -101,13 +133,22 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
 
     /// 拼接一帧，把结果送回主线程（在 queue 上调用）
     private func process(_ frame: PixelFrame) {
-        let event = stitcher.add(frame)
-        let changed: Bool = switch event {
-        case .started, .appended, .limitReached: true
-        default: false
+        let event = stitcher.add(frame, hint: hint.map { Int($0.rounded()) })
+        // 对上了：提示从这一帧重新算；对不上时继续累计（拼接还是拿上一次对上的帧比）
+        if event != .lost { hint = 0 }
+        switch event {
+        case .started, .appended, .limitReached, .moved, .unchanged: previewDirty = true   // 覆盖更新也会改变预览
+        case .lost: break
         }
-        let update = Update(event: event, length: stitcher.length, preview: changed ? stitcher.previewParts() : nil,
-                            generation: generation)
+        var preview: [CGImage]?
+        let now = ContinuousClock.now
+        if previewDirty, event == .started || now - lastPreview >= .milliseconds(200) {
+            // 预览只显示最后一段（预览窗口约 150 × 420 点，取宽度的 3 倍长就够）
+            preview = stitcher.previewParts(maxLines: max(600, (axis == .vertical ? frame.width : frame.height) * 3))
+            previewDirty = false
+            lastPreview = now
+        }
+        let update = Update(event: event, length: stitcher.length, preview: preview, generation: generation)
         let callback = onUpdate
         Task { @MainActor in callback?(update) }
     }

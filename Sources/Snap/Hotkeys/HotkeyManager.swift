@@ -29,6 +29,9 @@ final class HotkeyManager {
     /// 已按下、尚未松开的快捷键：用来忽略按住不放时可能出现的重复按下事件
     private var held: Set<Action> = []
     private var handlerRef: EventHandlerRef?
+    /// 临时快捷键（例如长截图期间的 Esc）：编号从 100 开始，和三个固定动作区分开
+    private var temporary: [UInt32: (ref: EventHotKeyRef, handler: () -> Void)] = [:]
+    private var nextTemporaryID: UInt32 = 100
 
     /// 'SNAP'，用来区分是不是本程序注册的快捷键
     private static let signature: OSType = 0x534E_4150
@@ -85,8 +88,29 @@ final class HotkeyManager {
         register(action)
     }
 
+    /// 注册一个临时快捷键（例如长截图期间按 Esc 取消）。注册期间这个按键只交给 Snap，不会传给当前 App。
+    /// - Returns: 编号，用 removeTemporary 注销；注册失败（被别的程序占用）时返回 nil
+    func addTemporary(keyCode: Int, modifiers: UInt32 = 0, handler: @escaping () -> Void) -> UInt32? {
+        installHandlerIfNeeded()
+        let number = nextTemporaryID
+        nextTemporaryID += 1
+        var ref: EventHotKeyRef?
+        let id = EventHotKeyID(signature: Self.signature, id: number)
+        guard RegisterEventHotKey(UInt32(keyCode), modifiers, id, GetApplicationEventTarget(), 0, &ref) == noErr, let ref else {
+            return nil
+        }
+        temporary[number] = (ref, handler)
+        return number
+    }
+
+    func removeTemporary(_ number: UInt32) {
+        if let entry = temporary.removeValue(forKey: number) { UnregisterEventHotKey(entry.ref) }
+    }
+
     #if DEBUG
     var debugRegisteredCount: Int { registered.count }
+    var debugTemporaryCount: Int { temporary.count }
+    func debugPressTemporary(_ number: UInt32) { handle(id: number, isPress: true) }
     #endif
 
     // MARK: - 注册
@@ -141,6 +165,10 @@ final class HotkeyManager {
     }
 
     private func handle(id: UInt32, isPress: Bool) {
+        if let entry = temporary[id] {
+            if isPress { entry.handler() }
+            return
+        }
         guard let action = Action(rawValue: id) else { return }
         if isPress {
             // 按住不放时只认第一次按下

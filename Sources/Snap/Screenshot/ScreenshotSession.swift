@@ -816,9 +816,12 @@ final class ScreenshotSession: OverlayEventHandler {
     func debugSelectTool(_ tool: AnnotationTool?) { selectTool(tool) }
     func debugPerform(_ action: AnnotationToolbar.Action) { perform(action) }
     /// 自测用：所有工具都设成这个样式
-    func debugSetStyle(_ style: AnnotationStyle) {
-        ToolStyleMemory.debugSetAll(style)
-        updateStyle { $0 = style }
+    /// 所有工具设成同一个颜色 / 不透明度，大小用各自的第 level 档（0 小、1 中、2 大）
+    func debugSetStyle(_ style: AnnotationStyle, level: Int = 1) {
+        ToolStyleMemory.debugSetAll(style, level: level)
+        var current = style
+        current.size = (annotator?.tool ?? .rectangle).presetSizes[level]
+        updateStyle { $0 = current }
     }
     #endif
 }

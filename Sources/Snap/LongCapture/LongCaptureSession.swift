@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 
 /// 长截图：在截图界面框选区域、点工具栏的「长截图」后开始。
 ///
@@ -25,6 +26,15 @@ final class LongCaptureSession {
     /// 换过几次方向（和采集那边的 generation 对应，旧一轮的结果不要）
     private var generation = 0
 
+    /// 有「辅助功能」权限时：把猛甩拆成小段滚动，滚多快都接得上
+    private var scrollTap: LongCaptureScrollTap?
+    /// 看滚轮滚了多少（只看不改，不需要权限），告诉拼接大概滚了多少
+    private var scrollMonitor: Any?
+    /// 还没有权限时：每秒看一次，一给权限就装上限速
+    private var permissionTimer: Timer?
+    /// 长截图期间的 Esc（焦点在被截的 App 里，只能注册成全局快捷键）
+    private var escapeKey: UInt32?
+
     // 自动滚动
     private var autoTimer: Timer?
     private var autoStarted = ContinuousClock.now
@@ -48,7 +58,9 @@ final class LongCaptureSession {
         bar.onCancel = { [weak self] in self?.cancel() }
         bar.onSave = { [weak self] in self?.complete(save: true) }
         bar.onDone = { [weak self] in self?.complete(save: false) }
-        overlay.message = Self.hint(for: axis)
+        installScrollWatchers()
+        escapeKey = HotkeyManager.shared.addTemporary(keyCode: kVK_Escape) { [weak self] in self?.cancel() }
+        overlay.message = hint
         overlay.orderFrontRegardless()
         placeChrome()
         bar.orderFrontRegardless()
@@ -72,8 +84,68 @@ final class LongCaptureSession {
         }
     }
 
-    private static func hint(for axis: ScrollAxis) -> String {
-        axis == .vertical ? "请缓慢向下滚动页面，或点「自动滚动」" : "请缓慢向右滚动页面，或点「自动滚动」"
+    /// 开始时的提示：有限速时可以随便滚，没有时请慢一点（并说明怎样开启限速）
+    private var hint: String {
+        let direction = axis == .vertical ? "向下" : "向右"
+        if scrollTap != nil {
+            return "\(direction)滚动页面即可，滚快了 Snap 会自动放慢，不会漏掉内容；也可以点「自动滚动」"
+        }
+        if !Preferences.shared.longCaptureThrottle {
+            return "请缓慢\(direction)滚动页面，或点「自动滚动」"   // 设置里关了滚动限速
+        }
+        return "请缓慢\(direction)滚动页面，或点「自动滚动」\n在 系统设置 › 隐私与安全性 › 辅助功能 里允许 Snap 后，滚多快都不会漏"
+    }
+
+    /// 监听滚轮（给拼接提示滚动量），有权限时再装上限速
+    private func installScrollWatchers() {
+        scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, self.region.contains(NSEvent.mouseLocation) else { return }
+                let delta = self.axis == .vertical ? event.scrollingDeltaY : event.scrollingDeltaX
+                self.engine.addScrollHint(delta, precise: event.hasPreciseScrollingDeltas)
+            }
+        }
+        // 限速要「辅助功能」权限：没有时请求一次（系统只在第一次弹出提示），之后一给权限就装上
+        if Preferences.shared.longCaptureThrottle, !CGPreflightPostEventAccess() {
+            _ = CGRequestPostEventAccess()
+            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+                MainActor.assumeIsolated {
+                    guard let self, CGPreflightPostEventAccess() else { return }
+                    timer.invalidate()
+                    self.permissionTimer = nil
+                    self.installThrottle()
+                    if self.overlay.message != nil, !self.hasScrolled { self.overlay.message = self.hint }
+                }
+            }
+        }
+        installThrottle()
+    }
+
+    /// 限速：只有给了「辅助功能」权限才装得上
+    private func installThrottle() {
+        scrollTap?.stop()
+        scrollTap = nil
+        guard Preferences.shared.longCaptureThrottle, CGPreflightPostEventAccess() else { return }
+        let extent = axis == .vertical ? region.height : region.width
+        scrollTap = LongCaptureScrollTap(region: cgRegion, axis: axis, extent: extent,
+                                         framesPerSecond: screen.maximumFramesPerSecond,
+                                         speed: Preferences.shared.longCaptureThrottleSpeed.factor)
+        Log.capture.notice("长截图：滚动限速\(self.scrollTap == nil ? "不可用" : "已开启", privacy: .public)")
+    }
+
+    private func removeScrollWatchers() {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        scrollMonitor = nil
+        scrollTap?.stop()
+        scrollTap = nil
+    }
+
+    /// 选区（Quartz 全局坐标：原点在主屏左上角）
+    private var cgRegion: CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        return CGRect(x: region.minX, y: primaryHeight - region.maxY, width: region.width, height: region.height)
     }
 
     // MARK: - 拼接进度
@@ -114,7 +186,8 @@ final class LongCaptureSession {
         length = 0
         bar.setLength(0, axis: newAxis, scale: scale)
         preview.show([], axis: newAxis)
-        overlay.message = Self.hint(for: newAxis)
+        if scrollTap != nil { installThrottle() }   // 限速按新方向重新装
+        overlay.message = hint
         placeChrome()
     }
 
@@ -132,6 +205,8 @@ final class LongCaptureSession {
             Log.capture.notice("长截图：自动滚动缺少辅助功能权限，已请求")
             return
         }
+        // 刚给了权限：顺便装上限速
+        if scrollTap == nil { installThrottle() }
         // 滚动事件发给鼠标下面的窗口：先把指针移到选区中间
         CGWarpMouseCursorPosition(cgCenter)
         CGAssociateMouseAndMouseCursorPosition(1)
@@ -140,7 +215,7 @@ final class LongCaptureSession {
         autoAppended = false
         overlay.message = nil
         bar.isAutoScrolling = true
-        autoTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        autoTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.autoTick() }
         }
     }
@@ -161,11 +236,13 @@ final class LongCaptureSession {
             return
         }
         let extent = axis == .vertical ? region.height : region.width
-        let amount = Int32(max(20, min(240, extent * 0.15))) * autoSign
+        // 每秒约 3 个选区高度（每 0.05 秒滚 15%），相邻两帧重叠很多，又不至于慢得等不及
+        let amount = Int32(max(12, min(320, extent * 0.15 * Preferences.shared.longCaptureAutoSpeed.factor))) * autoSign
         let event = axis == .vertical
             ? CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)
             : CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: amount, wheel3: 0)
         event?.location = cgCenter
+        event?.setIntegerValueField(.eventSourceUserData, value: LongCaptureScrollTap.marker)   // 速度已经可控，不再限速
         event?.post(tap: .cghidEventTap)
     }
 
@@ -212,6 +289,9 @@ final class LongCaptureSession {
     }
 
     private func close() {
+        removeScrollWatchers()
+        if let escapeKey { HotkeyManager.shared.removeTemporary(escapeKey) }
+        escapeKey = nil
         engine.onUpdate = nil
         engine.onError = nil
         overlay.orderOut(nil)
@@ -266,7 +346,7 @@ final class LongCaptureSession {
     func debugStartWithoutCapture() {
         bar.onAxis = { [weak self] axis in self?.setAxis(axis) }
         bar.onCancel = { [weak self] in self?.cancel() }
-        overlay.message = Self.hint(for: axis)
+        overlay.message = hint
         overlay.orderFrontRegardless()
         placeChrome()
         bar.orderFrontRegardless()
@@ -276,6 +356,11 @@ final class LongCaptureSession {
     func debugImage() async -> CGImage? { await engine.makeImage() }
     func debugSetAxis(_ axis: ScrollAxis) { setAxis(axis) }
     func debugCancel() { cancel() }
+    /// 自测：注册 Esc，并返回编号（可以模拟按下）
+    func debugInstallEscape() -> UInt32? {
+        escapeKey = HotkeyManager.shared.addTemporary(keyCode: kVK_Escape) { [weak self] in self?.cancel() }
+        return escapeKey
+    }
     var debugBar: LongCaptureBar { bar }
     var debugOverlay: LongCaptureOverlay { overlay }
     var debugPreview: LongCapturePreview { preview }
@@ -369,10 +454,10 @@ final class LongCaptureBar: NSPanel {
     private let bar = FrostedPanel(blending: .behindWindow)
     private let direction = SegmentedPill(titles: ["竖向", "横向"], help: "滚动方向")
     private let autoButton = PillButton(title: "自动滚动", symbol: "arrow.down.to.line",
-                                        color: NSColor(srgbRed: 0.38, green: 0.62, blue: 0.88, alpha: 1),
+                                        color: NSColor(srgbRed: 0.62, green: 0.45, blue: 0.34, alpha: 1),   // 可可棕，和杏色的「完成」区分开
                                         help: "自动滚动页面（需要「辅助功能」权限）")
     private let lengthLabel = NSTextField(labelWithString: "")
-    private let cancelButton = ToolbarButton(symbol: "xmark", help: "取消长截图")
+    private let cancelButton = ToolbarButton(symbol: "xmark", help: "取消长截图（Esc）")
     private let saveButton = ToolbarButton(symbol: "square.and.arrow.down", help: "完成并保存到文件")
     private let doneButton = PillButton(title: "完成", symbol: "checkmark", color: WarmPalette.apricot,
                                         help: "完成：复制到剪贴板、显示缩略图")
