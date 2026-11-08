@@ -110,6 +110,16 @@ final class RegionSelector {
         return selection.contains(point) ? .openHand : .crosshair
     }
 
+    /// 正好按在选区的 8 个控制点之一上（不含四条边，免得和在选区边缘画标注冲突）：
+    /// 选着标注工具时也能拖这几个点调整选区
+    func cornerHandle(at point: CGPoint) -> Handle? {
+        guard let selection else { return nil }
+        return Handle.allCases.first {
+            let p = $0.point(in: selection)
+            return hypot(point.x - p.x, point.y - p.y) <= handleHitRadius
+        }
+    }
+
     // MARK: - 鼠标
 
     func mouseMoved(to point: CGPoint) {

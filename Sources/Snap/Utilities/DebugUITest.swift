@@ -1071,6 +1071,30 @@ enum DebugUITest {
         let scribble = Annotation(shape: .pen([.zero, CGPoint(x: 10, y: 10)]), color: .red, size: .medium, opacity: 1)
         check("画笔没有控制点（只能移动）", scribble.resizeHandles.isEmpty)
 
+        // 选着标注工具时，仍然可以拖选区的控制点调整截图范围（标注保留）
+        session.debugSelectTool(.rectangle)
+        if let region = session.debugSelector.selection {
+            let corner = CGPoint(x: region.maxX, y: region.minY)
+            let count = document.annotations.count
+            check("选着工具时选区控制点上：调整大小的光标", session.overlayCursor(at: corner) != .crosshair
+                  && session.overlayCursor(at: corner) != .arrow)
+            session.overlayMouseDown(at: corner)
+            session.overlayMouseDragged(to: CGPoint(x: corner.x + 10, y: corner.y - 5))
+            session.overlayMouseDragged(to: CGPoint(x: corner.x + 20, y: corner.y - 10))
+            session.overlayMouseUp(at: CGPoint(x: corner.x + 20, y: corner.y - 10))
+            check("选着工具时拖选区右下角：选区变大，不画新标注",
+                  session.debugSelector.selection == CGRect(x: region.minX, y: region.minY - 10,
+                                                           width: region.width + 20, height: region.height + 10)
+                  && document.annotations.count == count && annotator.tool == .rectangle,
+                  "\(String(describing: session.debugSelector.selection))")
+            render("10f-选着工具时调整选区")
+            session.overlayMouseDown(at: CGPoint(x: corner.x + 20, y: corner.y - 10))
+            session.overlayMouseDragged(to: corner)
+            session.overlayMouseUp(at: corner)
+            check("拖回去：选区恢复原样", session.debugSelector.selection == region)
+        }
+        session.debugSelectTool(nil)
+
         // 不透明度：没选工具时选中标注也显示属性栏；拖滑块改选中的标注，连续拖动合并成一次撤销
         let originalColor = document.annotation(withID: firstID)?.color ?? .clear
         check("没选工具、选中标注时显示属性栏和不透明度", toolbar.debugPropertyBarVisible && toolbar.debugShowsOpacity

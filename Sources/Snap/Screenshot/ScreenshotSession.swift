@@ -460,9 +460,10 @@ final class ScreenshotSession: OverlayEventHandler {
 
     // MARK: - 界面刷新
 
-    /// 放大镜只在需要对准像素时出现：还没有选区（悬停 / 准备拖拽），或正在拖出选区、拖动控制点；标注时不显示
+    /// 放大镜只在需要对准像素时出现：还没有选区（悬停 / 准备拖拽），或正在拖出选区、拖动控制点（选着标注工具时也是）
     private var isMagnifierVisible: Bool {
-        !isTranslating && mode == .region && displays[activeDisplayID] != nil && annotator?.tool == nil
+        !isTranslating && mode == .region && displays[activeDisplayID] != nil
+            && (annotator?.tool == nil || selector.isSizing)
             && (selector.selection == nil || selector.isSizing)
     }
 
@@ -651,6 +652,10 @@ final class ScreenshotSession: OverlayEventHandler {
         if toolbar.isShowingColorPicker { return .arrow }
         // 选中标注的控制点上（或正在拖控制点）：调整大小的箭头
         if let annotator, let p = canvasPoint(point), let cursor = annotator.resizeCursor(at: p) { return cursor }
+        // 选着标注工具时，选区的 8 个控制点上（或正在拖它们）：调整选区大小的箭头
+        if isAnnotating, mode == .region, selector.isSizing || selector.cornerHandle(at: point) != nil {
+            return selector.cursor(at: point)
+        }
         // 鼠标正好在已有的标注上、在选中标注的虚线框内（或正在拖动标注）：系统标准指针，表示可以选中、拖动
         if let annotator, let p = canvasPoint(point),
            annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: p) != nil {
@@ -676,6 +681,15 @@ final class ScreenshotSession: OverlayEventHandler {
     func overlayMouseDown(at point: NSPoint) {
         track(point)
         mouseOwner = .none
+        // 选着标注工具时按在选区的控制点上：调整选区大小（选中标注自己的控制点优先）
+        if isAnnotating, mode == .region, selector.cornerHandle(at: point) != nil,
+           canvasPoint(point).flatMap({ annotator?.resizeHandle(at: $0) }) == nil {
+            annotator?.endTextEditing()
+            selector.mouseDown(at: point)
+            mouseOwner = .selector
+            refresh()
+            return
+        }
         // 点中已有的标注（任何时候都可以选中、拖动），或选着工具在画新的标注
         if let annotator, let p = canvasPoint(point),
            annotator.mouseDown(at: p, shift: NSEvent.modifierFlags.contains(.shift)) {
