@@ -22,6 +22,8 @@ final class ScreenshotSession: OverlayEventHandler {
     var onFinish: (() -> Void)?
     /// 截屏翻译：选好区域后回调（这时界面已经关闭）
     var onTranslate: ((FrozenDisplay.Crop) -> Void)?
+    /// 长截图：点了工具栏的「长截图」（这时界面已经关闭），参数是选区（全局坐标）和所在屏幕
+    var onLongCapture: ((CGRect, NSScreen) -> Void)?
 
     let purpose: Purpose
     private var isTranslating: Bool { purpose == .translate }
@@ -41,7 +43,7 @@ final class ScreenshotSession: OverlayEventHandler {
     private let hint = HintBar()
 
     /// 标注：工具栏在选区旁（全屏模式在屏幕底部中央）；标注画在冻结底图上，选区只决定最后裁剪哪一块
-    private let toolbar = AnnotationToolbar()
+    private let toolbar = AnnotationToolbar(showsLongCapture: true)
     private var annotator: AnnotationController?
     private var annotatorDisplayID: CGDirectDisplayID?
 
@@ -301,6 +303,15 @@ final class ScreenshotSession: OverlayEventHandler {
         ScreenshotOutput.deliver(result.image, scale: result.scale, sourceRect: result.sourceRect, forceSave: save)
     }
 
+    /// 长截图：关掉截图界面（焦点还给原来的 App），交给长截图会话。要在画标注之前开始
+    private func beginLongCapture() {
+        guard mode == .region, annotator?.document.isEmpty != false,
+              let target = selector.target, let frozen = displays[target.displayID] else { return }
+        let screen = frozen.screen
+        finish()
+        onLongCapture?(target.rect, screen)
+    }
+
     /// 钉图：把结果（含标注）直接钉在原位，不复制、不保存
     private func pinResult() {
         guard let result = makeResult() else { return }
@@ -343,6 +354,7 @@ final class ScreenshotSession: OverlayEventHandler {
         case .redo: annotator?.redo()
         case .pin: pinResult()
         case .save: complete(save: true)
+        case .longCapture: beginLongCapture()
         case .cancel: cancel()
         case .done: complete()
         }
@@ -414,7 +426,8 @@ final class ScreenshotSession: OverlayEventHandler {
         let annotator = prepareAnnotator()
         toolbar.update(tool: annotator?.tool, style: annotator?.displayedStyle ?? AnnotationStyle(),
                        canUndo: annotator?.document.canUndo ?? false, canRedo: annotator?.document.canRedo ?? false,
-                       selectionTool: annotator?.selectedAnnotation?.tool)
+                       selectionTool: annotator?.selectedAnnotation?.tool,
+                       canLongCapture: mode == .region && annotator?.document.isEmpty != false)
         if toolbar.superview !== view {
             toolbar.removeFromSuperview()
             view.addSubview(toolbar)
@@ -799,6 +812,7 @@ final class ScreenshotSession: OverlayEventHandler {
     var debugAnnotator: AnnotationController? { annotator }
     var debugOverlayLevel: Int { overlays[activeDisplayID]?.level.rawValue ?? -1 }
     var debugToolbar: AnnotationToolbar { toolbar }
+    func debugToolbarRefresh() { updateToolbar() }
     func debugSelectTool(_ tool: AnnotationTool?) { selectTool(tool) }
     func debugPerform(_ action: AnnotationToolbar.Action) { perform(action) }
     /// 自测用：所有工具都设成这个样式

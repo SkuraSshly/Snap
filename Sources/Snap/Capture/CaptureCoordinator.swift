@@ -7,6 +7,7 @@ final class CaptureCoordinator {
 
     private var screenshotSession: ScreenshotSession?
     private var recordingSession: RecordingSelectionSession?
+    private var longCaptureSession: LongCaptureSession?
 
     private init() {}
 
@@ -49,6 +50,8 @@ final class CaptureCoordinator {
     }
 
     func handleHotkey(_ action: HotkeyManager.Action) {
+        // 长截图进行中：其他截图、录屏都等它结束（用控制条上的「完成」或「取消」）
+        guard longCaptureSession == nil else { return }
         switch action {
         case .screenshot, .translate:
             let purpose: ScreenshotSession.Purpose = action == .screenshot ? .screenshot : .translate
@@ -81,12 +84,22 @@ final class CaptureCoordinator {
 
         let session = ScreenshotSession(hotkey: purpose == .screenshot ? screenshotHotkey : translateHotkey, purpose: purpose)
         session.onTranslate = { crop in ScreenTranslateController.shared.recognize(crop) }
+        session.onLongCapture = { [weak self] region, screen in self?.beginLongCapture(region: region, screen: screen) }
         if purpose == .translate { ScreenTranslateController.shared.warmUp() }
         session.onFinish = { [weak self] in
             self?.screenshotSession = nil
         }
         screenshotSession = session
         session.start(after: delay)
+    }
+
+    /// 长截图：截图界面里选好区域、点「长截图」后开始
+    private func beginLongCapture(region: CGRect, screen: NSScreen) {
+        guard longCaptureSession == nil else { return }
+        let session = LongCaptureSession(region: region, screen: screen)
+        session.onFinish = { [weak self] in self?.longCaptureSession = nil }
+        longCaptureSession = session
+        session.start()
     }
 
     /// 开始录屏选区（录制中则不处理）
@@ -112,5 +125,6 @@ final class CaptureCoordinator {
     #if DEBUG
     var debugSession: ScreenshotSession? { screenshotSession }
     var debugRecordingSession: RecordingSelectionSession? { recordingSession }
+    var debugLongCaptureSession: LongCaptureSession? { longCaptureSession }
     #endif
 }

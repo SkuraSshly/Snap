@@ -5,7 +5,7 @@ import AppKit
 /// 第二行（选了工具或选中了标注时出现）：6 种颜色 + 任意颜色 | 3 档粗细 / 字号 / 强度 | 不透明度
 final class AnnotationToolbar: NSView {
     enum Action {
-        case undo, redo, pin, save, cancel, done
+        case undo, redo, pin, save, longCapture, cancel, done
     }
 
     var onSelectTool: ((AnnotationTool?) -> Void)?
@@ -29,6 +29,8 @@ final class AnnotationToolbar: NSView {
     private let opacitySeparator = WarmSeparator()
     private let opacitySlider = OpacitySlider()
     private let blending: NSVisualEffectView.BlendingMode
+    /// 截图界面有「长截图」按钮；重新编辑窗口没有
+    private let showsLongCapture: Bool
     private var currentColor: NSColor = AnnotationPalette.colors[0]
     private(set) var colorPicker: ColorPickerView?
 
@@ -37,14 +39,22 @@ final class AnnotationToolbar: NSView {
     private static let padding: CGFloat = 5
     private static let gap: CGFloat = 8
 
+    #if DEBUG
+    /// 自测：长截图按钮是否可用；没有这个按钮时为 nil
+    var debugLongCaptureEnabled: Bool? { actionButtons[.longCapture]?.isEnabled }
+    #endif
+
     /// 主栏的高度（定位时用）
     static var mainBarHeight: CGFloat { buttonSize + padding * 2 }
 
-    /// - Parameter blending: 截图界面 .withinWindow（虚化冻结画面）；编辑窗口同样
-    init(blending: NSVisualEffectView.BlendingMode = .withinWindow) {
+    /// - Parameters:
+    ///   - blending: 截图界面 .withinWindow（虚化冻结画面）；编辑窗口同样
+    ///   - showsLongCapture: 显示「长截图」按钮（只在截图界面）
+    init(blending: NSVisualEffectView.BlendingMode = .withinWindow, showsLongCapture: Bool = false) {
         mainBar = FrostedPanel(blending: blending)
         propertyBar = FrostedPanel(blending: blending)
         self.blending = blending
+        self.showsLongCapture = showsLongCapture
         super.init(frame: .zero)
         addSubview(mainBar)
         addSubview(propertyBar)
@@ -94,6 +104,9 @@ final class AnnotationToolbar: NSView {
         separator()
         addAction(.pin, symbol: "pin", help: "钉在屏幕上", add: add)
         addAction(.save, symbol: "square.and.arrow.down", help: "保存到文件（⌘S）", add: add)
+        if showsLongCapture {
+            addAction(.longCapture, symbol: "arrow.up.and.down.text.horizontal", help: "长截图：滚动页面，截取超出屏幕的内容", add: add)
+        }
         separator()
         addAction(.cancel, symbol: "xmark", help: "取消（Esc）", add: add)
         doneButton.action = { [weak self] in self?.onAction?(.done) }
@@ -167,9 +180,15 @@ final class AnnotationToolbar: NSView {
 
     /// 刷新选中状态；选了工具时显示第二行（马赛克 / 模糊只显示强度）。
     /// - Parameter selectionTool: 没选工具但选中了标注时，按这个标注的种类显示第二行
+    /// - Parameter canLongCapture: 长截图按钮是否可用（全屏模式、已经画了标注时不可用）
     func update(tool: AnnotationTool?, style: AnnotationStyle, canUndo: Bool, canRedo: Bool,
-                selectionTool: AnnotationTool? = nil) {
+                selectionTool: AnnotationTool? = nil, canLongCapture: Bool = true) {
         for (t, button) in toolButtons { button.isSelected = t == tool }
+        if let longCapture = actionButtons[.longCapture] {
+            longCapture.isEnabled = canLongCapture
+            longCapture.toolTip = canLongCapture ? "长截图：滚动页面，截取超出屏幕的内容"
+                                                 : "长截图要在画标注之前开始（全屏模式不能长截图）"
+        }
         actionButtons[.undo]?.isEnabled = canUndo
         actionButtons[.redo]?.isEnabled = canRedo
         currentColor = style.color

@@ -314,6 +314,7 @@ enum DebugUITest {
 
         checkEncoder(check: check)
         await runTranslateChecks(dir: dir, check: check)
+        await runLongCaptureChecks(dir: dir, check: check)
         ToolStyleMemory.debugCleanUp()
         report(check.lines, to: dir)
     }
@@ -822,6 +823,113 @@ enum DebugUITest {
         }
     }
 
+    /// 长截图：拼接算法（合成的长页面，带顶部标题栏、底部输入框）、界面（喂合成画面，不截真实屏幕）
+    private static func runLongCaptureChecks(dir: URL, check: Checks) async {
+        check("编辑窗口的工具栏没有「长截图」", AnnotationToolbar().debugLongCaptureEnabled == nil)
+
+        // 合成的长页面：每行是随机的「文字」，每 17 行里有 3 行空白（段落间距）
+        func content(_ count: Int, _ cross: Int, seed: UInt32) -> [[UInt32]] {
+            var g = seed
+            func next() -> UInt32 { g = g &* 1_664_525 &+ 1_013_904_223; return g }
+            return (0..<count).map { i in
+                i % 17 >= 14 ? [UInt32](repeating: 0xFFFF_FFFF, count: cross)
+                    : (0..<cross).map { _ in next() % 5 == 0 ? 0xFF00_0000 | (next() & 0x00FF_FFFF) : 0xFFFF_FFFF }
+            }
+        }
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        func frame(_ lines: [[UInt32]], cross: Int, axis: ScrollAxis) -> PixelFrame {
+            let n = lines.count
+            let (w, h) = axis == .vertical ? (cross, n) : (n, cross)
+            var data = Data(count: w * h * 4)
+            data.withUnsafeMutableBytes { raw in
+                let p = raw.bindMemory(to: UInt32.self)
+                for y in 0..<h { for x in 0..<w { p[y * w + x] = axis == .vertical ? lines[y][x] : lines[x][y] } }
+            }
+            return PixelFrame(width: w, height: h, bytesPerRow: w * 4, data: data, colorSpace: space)
+        }
+        func lines(of image: CGImage, cross: Int, axis: ScrollAxis) -> [[UInt32]] {
+            guard let f = PixelFrame(image: image, colorSpace: space) else { return [] }
+            return f.data.withUnsafeBytes { raw in
+                let p = raw.bindMemory(to: UInt32.self)
+                let n = axis == .vertical ? f.height : f.width
+                return (0..<n).map { i in (0..<cross).map { j in axis == .vertical ? p[i * f.width + j] : p[j * f.width + i] } }
+            }
+        }
+
+        // 1. 拼接算法：竖向、横向各一遍
+        let cross = 120, header = 20, footer = 30, viewport = 300, area = 250
+        let page = content(1600, cross, seed: 7)
+        let top = content(header, cross, seed: 99).map { $0.map { $0 ^ 0x0012_3456 } }
+        let bottom = content(footer, cross, seed: 55).map { $0.map { $0 ^ 0x0065_4321 } }
+        func view(_ pos: Int) -> [[UInt32]] { top + Array(page[pos..<(pos + area)]) + bottom }
+        _ = viewport
+        for axis in [ScrollAxis.vertical, .horizontal] {
+            let tag = axis == .vertical ? "竖向" : "横向"
+            var s = ScrollStitcher(axis: axis)
+            var events: [ScrollStitcher.Event] = []
+            for pos in [0, 0, 40, 90, 60, 150, 500, 330] { events.append(s.add(frame(view(pos), cross: cross, axis: axis))) }
+            check("长截图\(tag)：开始、不动、接上、往回滚不重复、滚太远对不上、回来继续",
+                  events == [.started, .unchanged, .appended(40), .appended(50), .moved, .appended(60), .lost, .appended(180)],
+                  "\(events)")
+            for pos in stride(from: 400, through: 1200, by: 70) { s.add(frame(view(pos), cross: cross, axis: axis)) }
+            let expected = top + Array(page[0..<(1170 + area)]) + bottom
+            let got = s.makeImage().map { lines(of: $0, cross: cross, axis: axis) } ?? []
+            check("长截图\(tag)：结果与原页面逐像素一致，底部输入框只出现一次", got == expected, "\(got.count) / \(expected.count) 行")
+            var limited = ScrollStitcher(axis: axis, maxLength: 600)
+            var last = limited.add(frame(view(0), cross: cross, axis: axis))
+            for pos in stride(from: 60, through: 900, by: 60) { last = limited.add(frame(view(pos), cross: cross, axis: axis)) }
+            check("长截图\(tag)：到长度上限停止", last == .limitReached && limited.length == 600, "\(last) \(limited.length)")
+        }
+
+        // 2. 界面：屏幕中间 320×240 的选区，下面垫合成的桌面；画面直接喂合成的，不截真实屏幕
+        guard let screen = NSScreen.main, let desktop = DebugShowcase.desktopImage(for: screen) else {
+            return check("长截图界面：准备合成桌面", false)
+        }
+        let backdrop = DebugShowcase.makeBackdrop(for: screen, image: desktop, level: .floating)
+        defer { backdrop.close() }
+        let visible = screen.visibleFrame
+        let region = CGRect(x: (visible.midX - 260).rounded(), y: (visible.midY - 100).rounded(), width: 320, height: 240)
+        let session = LongCaptureSession(region: region, screen: screen)
+        var finished = false
+        session.onFinish = { finished = true }
+        session.debugStartWithoutCapture()
+        try? await Task.sleep(for: .milliseconds(200))
+        check("长截图开始：提示「请缓慢向下滚动页面」", session.debugOverlay.message?.contains("向下滚动") == true)
+        check("控制条在选区下方，预览在选区右边", session.debugBar.barFrame.maxY <= region.minY
+              && session.debugPreview.isVisible && session.debugPreview.frame.minX >= region.maxX)
+
+        let scale = screen.backingScaleFactor
+        let px = Int(region.width * scale), viewLines = Int(region.height * scale)
+        let longPage = content(viewLines * 7, px, seed: 3)
+        func screenFrame(_ pos: Int) -> PixelFrame { frame(Array(longPage[pos..<(pos + viewLines)]), cross: px, axis: .vertical) }
+        let step = viewLines / 4
+        for k in 0..<10 { session.debugFeed(screenFrame(k * step)) }
+        try? await Task.sleep(for: .milliseconds(600))
+        let expectedLength = viewLines + 9 * step
+        check("喂 10 帧：拼好的长度正确，控制条显示「已拼接」", session.debugLength == expectedLength
+              && session.debugBar.debugLengthText == "已拼接 \(expectedLength) 像素", "\(session.debugLength) / \(expectedLength)")
+        check("开始滚动后提示消失、预览有内容", session.debugOverlay.message == nil && session.debugPreview.debugPartCount >= 5)
+        if let image = await session.debugImage() {
+            check("长截图结果：宽 \(px) 像素、高 \(expectedLength) 像素", image.width == px && image.height == expectedLength)
+        }
+        let area2 = region.union(session.debugBar.barFrame).union(session.debugPreview.frame).insetBy(dx: -30, dy: -30)
+        await captureComposite(around: area2, to: dir.appendingPathComponent("12-长截图界面实际显示.png"))
+
+        session.debugFeed(screenFrame(9 * step + viewLines * 2))
+        try? await Task.sleep(for: .milliseconds(300))
+        check("一下滚太远：提示往回滚", session.debugOverlay.message?.contains("滚动太快") == true)
+
+        session.debugSetAxis(.horizontal)
+        try? await Task.sleep(for: .milliseconds(200))
+        check("换成横向：从头开始，提示「向右滚动」", session.debugOverlay.message?.contains("向右滚动") == true
+              && session.debugLength == 0 && session.debugBar.debugLengthText == "等待滚动…")
+
+        session.debugCancel()
+        try? await Task.sleep(for: .milliseconds(300))
+        check("取消：长截图界面全部关闭", finished && !session.debugBar.isVisible && !session.debugOverlay.isVisible
+              && !session.debugPreview.isVisible)
+    }
+
     /// 识别服务进程（SnapOCR.xpc）是否在运行
     private static func ocrServiceRunning() -> Bool {
         let process = Process()
@@ -853,8 +961,11 @@ enum DebugUITest {
         session.debugSelectTool(.rectangle)
         guard let annotator = session.debugAnnotator else { return check("创建标注控制器", false) }
         check("选择工具后隐藏放大镜", !session.debugMagnifierVisible)
+        check("没画标注时「长截图」可用", session.debugToolbar.debugLongCaptureEnabled == true)
         drag(g(120, 120), g(180, 170))
         check("画矩形", annotator.document.annotations.count == 1)
+        session.debugToolbarRefresh()
+        check("画了标注后「长截图」不可用（要在标注之前开始）", session.debugToolbar.debugLongCaptureEnabled == false)
         let before = session.debugSelector.selection
         drag(g(400, 400), g(450, 450))
         check("选区外拖动不画标注、不改选区", annotator.document.annotations.count == 1 && session.debugSelector.selection == before)

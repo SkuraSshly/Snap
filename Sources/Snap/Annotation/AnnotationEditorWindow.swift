@@ -119,6 +119,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         case .cancel: window.close()
         case .done: finish(save: false)
         case .save: finish(save: true)
+        case .longCapture: break   // 编辑窗口没有长截图按钮
         case .pin:
             guard let image = render() else { return }
             window.close()

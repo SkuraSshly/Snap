@@ -231,8 +231,8 @@ final class ToolbarButton: WarmControl {
 
 /// 胶囊按钮（图标 + 文字）：「完成」「开始录制」
 final class PillButton: WarmControl {
-    private let title: String
-    private let symbol: String
+    var title: String { didSet { needsDisplay = true } }
+    var symbol: String { didSet { needsDisplay = true } }
     var color: NSColor { didSet { needsDisplay = true } }
 
     init(title: String, symbol: String, color: NSColor, help: String) {
