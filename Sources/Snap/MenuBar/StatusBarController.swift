@@ -81,9 +81,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.toolTip = (paused ? "录制已暂停" : "正在录制") + " · \(CaptureCoordinator.shared.recordingHotkey.displayString) 停止"
         } else {
             item.length = NSStatusItem.squareLength
-            let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Snap")
-            image?.isTemplate = true   // 模板图：自动适配浅色 / 深色菜单栏
-            button.image = image
+            button.image = VelosMark.menuBar   // 自己画的花体 V（模板图：自动适配浅色 / 深色菜单栏）
             button.imagePosition = .imageOnly
             button.title = ""
             button.toolTip = "Snap"

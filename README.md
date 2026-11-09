@@ -23,9 +23,10 @@
 ## 特点
 
 - **一键截图**：<kbd>⌥A</kbd> 冻结画面后框选，自动识别窗口，放大镜精确到像素；再按一次 <kbd>⌥A</kbd> 切换全屏。
-- **原位标注**：矩形、椭圆、箭头、直线、画笔、荧光笔、文字、序号、马赛克、模糊，支持撤销 / 重做。
-- **钉图**：把截图钉在屏幕最上层，可缩放、调透明度，方便对照。
-- **长截图**：框选后点工具栏的「长截图」，滚动页面（竖向或横向），Snap 边滚边拼接，顶部标题栏、底部输入框只出现一次；也可以「自动滚动」（需要辅助功能权限）。
+- **原位标注**：矩形、椭圆、箭头、直线、画笔、荧光笔、文字、序号、马赛克、模糊；粗细 / 字号用拉条精确到 1 点；矩形、椭圆可选实心，文字可加底色；选中后拖控制点调整大小，按住直接拖动；支持撤销 / 重做。
+- **钉图**：把截图钉在屏幕最上层，可缩放、调透明度，方便对照；长截图钉出来可以在窗口里滚动翻看。
+- **长截图**：框选后点工具栏的剪刀按钮，滚动页面（竖向或横向），Snap 边滚边拼接：顶部标题栏、底部输入框只出现一次，左右不动的边栏不会重复，滚动条不影响拼接；可以「自动滚动」，快速滚动时自动放慢不漏内容（这两项需要辅助功能权限）。
+- **编辑与查看**：单击缩略图打开编辑窗口继续标注；按住 <kbd>⌥</kbd> 滚动缩放（最大 400%），长截图按原像素宽度打开、上下滚动查看。
 - **高质量输出**：Retina 原生像素，写入色彩配置文件（Display P3 / sRGB），PNG / HEIC / JPEG。
 - **录屏**：<kbd>⌥S</kbd> 区域或全屏；HEVC / H.264 硬件编码；系统声音与麦克风实时混成一条 AAC 音轨；暂停时那一段不进视频。
 - **录制辅助**：3 秒倒计时、鼠标点击高亮、浮动控制条、红框标出录制范围（控制条和红框都不会被录进去）。
@@ -45,6 +46,10 @@
     <td><img src="docs/images/recording-controls.png" alt="录制中"><br><sub><b>录制中</b>：红框标出范围，控制条可暂停、停止；点击处出现高亮圆圈</sub></td>
   </tr>
   <tr>
+    <td><img src="docs/images/translate.png" alt="截屏翻译"><br><sub><b>截屏翻译</b>：松开鼠标立即出结果窗口，离线识别、离线翻译</sub></td>
+    <td><img src="docs/images/long-capture.png" alt="长截图"><br><sub><b>长截图</b>：在选区里滚动页面，旁边实时预览拼接结果</sub></td>
+  </tr>
+  <tr>
     <td><img src="docs/images/countdown.png" alt="倒计时"><br><sub><b>倒计时</b>：开始前倒数 3 秒，Esc 取消、Enter 立即开始</sub></td>
     <td align="center"><img src="docs/images/thumbnails.png" width="220" alt="缩略图"><br><sub><b>缩略图</b>：完成后出现在角落，可拖进任何 App；录屏可预览、导出 GIF</sub></td>
   </tr>
@@ -53,7 +58,7 @@
 <table>
   <tr>
     <td width="33%"><img src="docs/images/settings-general.png" alt="通用设置"></td>
-    <td width="33%"><img src="docs/images/settings-recording.png" alt="录屏设置"></td>
+    <td width="33%"><img src="docs/images/settings-translate.png" alt="截屏翻译设置"></td>
     <td width="33%"><img src="docs/images/settings-hotkeys.png" alt="快捷键设置"></td>
   </tr>
 </table>
@@ -64,10 +69,11 @@
 
 需要 **macOS 15 或更新**、**Apple 芯片**的 Mac。
 
-1. 在 [Releases](https://github.com/SkuraSshly/Snap/releases/latest) 下载 `Snap-1.0.0.dmg`，打开后把 Snap 拖进「应用程序」。
+1. 在 [Releases](https://github.com/SkuraSshly/Snap/releases/latest) 下载 `Snap-2.0.dmg`，打开后把 Snap 拖进「应用程序」。
 2. 打开 Snap。第一次运行会出现权限引导：
    - **屏幕与系统录音**（必需）：截图、录屏都需要。授权后按提示重新打开 Snap。
    - **麦克风**（可选）：只在录屏时录自己的声音才需要。
+   - **辅助功能**（可选）：只在长截图的自动滚动、滚动限速时需要，第一次用到时会请求。
 
 > **第一次打开被 macOS 拦下？** 这个版本没有使用 Apple 开发者证书签名、也没有经过公证，
 > macOS 会提示「无法验证开发者」。到 **系统设置 › 隐私与安全性**，在页面下方点 **「仍要打开」** 即可，只需一次。
@@ -85,12 +91,16 @@
 | 截图界面 | <kbd>⌘S</kbd> | 完成并保存到文件 |
 | 截图界面 | <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> | 撤销 / 重做 |
 | 截图界面 | <kbd>C</kbd> | 拷贝放大镜下的颜色值 |
+| 截图界面 | <kbd>⇧</kbd> + 拖动 | 正方形、正圆、45° 直线 / 箭头；拖控制点时等比缩放 |
+| 长截图 | <kbd>Esc</kbd> | 取消 |
 | 截图 / 录屏选区 | 方向键（<kbd>⇧</kbd> + 方向键） | 微调选区 1 像素（10 像素） |
 | 翻译结果窗口 | <kbd>⌘C</kbd> / <kbd>⇧⌘C</kbd> | 复制译文 / 原文 |
 | 翻译结果窗口 | <kbd>⌘R</kbd> / <kbd>⌘P</kbd> / <kbd>Esc</kbd> | 重新翻译 / 钉住 / 关闭 |
 | 截图 / 录屏选区 | <kbd>Esc</kbd> | 取消 |
 | 钉图 | 单击选中后 <kbd>Esc</kbd> 或双击 | 关闭钉图 |
-| 钉图 | 滚轮 / <kbd>⌘</kbd> + 滚轮 | 缩放 / 调整透明度 |
+| 钉图 | 滚轮 / <kbd>⌘</kbd> + 滚轮 | 缩放 / 调整透明度（长截图：滚轮翻看，<kbd>⌥</kbd> + 滚轮缩放） |
+| 编辑窗口 | <kbd>⌥</kbd> + 滚动 / 双指捏合 | 以鼠标为中心缩放 |
+| 编辑窗口 | <kbd>⌘=</kbd> / <kbd>⌘-</kbd> / <kbd>⌘0</kbd> | 放大 / 缩小 / 回到原来大小 |
 
 快捷键可以在 设置 › 快捷键 里修改，并会检查冲突（常用编辑快捷键、macOS 系统快捷键、Snap 自己的另一个快捷键）。
 

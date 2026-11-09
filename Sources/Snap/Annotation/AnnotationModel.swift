@@ -76,6 +76,11 @@ extension AnnotationTool {
     }
 
     var defaultSize: CGFloat { presetSizes[1] }
+
+    /// 有「填充」开关的工具：矩形、椭圆（实心），文字（加底色）
+    var supportsFill: Bool { self == .rectangle || self == .ellipse || self == .text }
+    /// 填充开关的说明
+    var fillTitle: String { self == .text ? "文字背景（底色用所选颜色）" : "实心" }
 }
 
 /// 标注颜色：红、黄、绿、蓝、白、黑
@@ -97,6 +102,8 @@ struct AnnotationStyle {
     var size: CGFloat = AnnotationTool.rectangle.defaultSize
     /// 不透明度 0.1 ~ 1
     var opacity: CGFloat = 1
+    /// 填充：矩形、椭圆画成实心；文字加底色
+    var filled = false
 }
 
 /// 每个工具各自记住上次用的颜色、粗细和不透明度：截图界面和重新编辑窗口共用，
@@ -129,7 +136,7 @@ enum ToolStyleMemory {
         styles = all
         defaults.set(all.reduce(into: [String: [String: Any]]()) { result, entry in
             result[entry.key.rawValue] = ["color": ColorCode.hex(entry.value.color), "sizeValue": Double(entry.value.size),
-                                          "opacity": Double(entry.value.opacity)]
+                                          "opacity": Double(entry.value.opacity), "filled": entry.value.filled]
         }, forKey: key)
     }
 
@@ -149,6 +156,7 @@ enum ToolStyleMemory {
                 style.size = tool.presetSizes[level]   // 旧版本保存的三档
             }
             if let opacity = entry["opacity"] as? Double { style.opacity = min(max(CGFloat(opacity), 0.1), 1) }
+            if let filled = entry["filled"] as? Bool { style.filled = filled && tool.supportsFill }
             result[tool] = style
         }
         styles = result
@@ -203,12 +211,15 @@ struct Annotation: Identifiable {
     var size: CGFloat
     /// 不透明度 0.1 ~ 1（整个标注一起变淡）。马赛克 / 模糊永远不透明：变淡会露出被遮住的内容
     var opacity: CGFloat = 1
+    /// 填充：矩形、椭圆是实心；文字有底色（其他标注忽略）
+    var filled = false
 
-    init(shape: Shape, color: NSColor, size: CGFloat, opacity: CGFloat = 1) {
+    init(shape: Shape, color: NSColor, size: CGFloat, opacity: CGFloat = 1, filled: Bool = false) {
         self.shape = shape
         self.color = color
         self.size = size
         self.opacity = Self.allowsOpacity(shape) ? opacity : 1
+        self.filled = filled
     }
 
     /// 能不能调不透明度（马赛克、模糊不能）
@@ -256,6 +267,21 @@ struct Annotation: Identifiable {
     static func textAttributes(color: NSColor, fontSize: CGFloat) -> [NSAttributedString.Key: Any] {
         [.font: textFont(size: fontSize), .foregroundColor: color]
     }
+
+    /// 有底色的文字：文字用白色还是黑色（浅色底上用黑字，其他用白字）
+    static func textColor(onBackground background: NSColor) -> NSColor {
+        guard let c = background.usingColorSpace(.sRGB) else { return .white }
+        let luminance = 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        return luminance > 0.6 ? .black : .white
+    }
+
+    /// 文字底色比文字本身大出的边距
+    static func textBackgroundPadding(fontSize: CGFloat) -> CGSize {
+        CGSize(width: (fontSize * 0.3).rounded(), height: (fontSize * 0.12).rounded())
+    }
+
+    /// 绘制文字时用的颜色：有底色时自动用白 / 黑字
+    var textForeground: NSColor { filled ? Self.textColor(onBackground: color) : color }
 }
 
 /// 标注列表 + 撤销 / 重做

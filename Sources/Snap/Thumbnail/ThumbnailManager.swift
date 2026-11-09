@@ -224,10 +224,14 @@ final class ThumbnailManager {
 
     // MARK: - 创建
 
-    /// 按比例缩放到不超过最大尺寸
-    private static func fittedSize(_ full: CGSize) -> CGSize {
+    /// 按比例缩放到不超过最大尺寸。
+    /// 长截图按比例缩下来会细成一条（例如 15 × 150），放不下关闭、保存、钉图三个按钮：
+    /// 窄的一边至少 150 × 100 点（原图本来就小时除外），图片按比例填满、只显示中间一段
+    static func fittedSize(_ full: CGSize) -> CGSize {
         let factor = min(maxSize.width / max(full.width, 1), maxSize.height / max(full.height, 1), 1)
-        return CGSize(width: max(60, (full.width * factor).rounded()), height: max(40, (full.height * factor).rounded()))
+        let width = max((full.width * factor).rounded(), min(150, full.width), 60)
+        let height = max((full.height * factor).rounded(), min(100, full.height), 40)
+        return CGSize(width: min(width, maxSize.width), height: min(height, maxSize.height))
     }
 
     private static func makePanel(size: CGSize, view: ThumbnailView) -> NSPanel {

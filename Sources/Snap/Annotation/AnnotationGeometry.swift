@@ -7,7 +7,7 @@ extension Annotation {
     var bounds: CGRect {
         switch shape {
         case .rectangle(let rect), .ellipse(let rect):
-            return rect.insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
+            return filled ? rect : rect.insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2)
         case .mosaic(let rect), .blur(let rect):
             return rect
         case .arrow(let a, let b):
@@ -22,14 +22,17 @@ extension Annotation {
         case .text(let string, let topLeft):
             let size = AnnotationRenderer.textSize(NSAttributedString(
                 string: string, attributes: Self.textAttributes(color: color, fontSize: fontSize)))
-            return CGRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
+            let rect = CGRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
+            guard filled else { return rect }
+            let pad = Self.textBackgroundPadding(fontSize: fontSize)
+            return rect.insetBy(dx: -pad.width, dy: -pad.height)
         case .counter(_, let center):
             return CGRect(x: center.x - counterRadius, y: center.y - counterRadius, width: counterRadius * 2, height: counterRadius * 2)
         }
     }
 
     /// 鼠标是否正好在这个标注画出来的地方：用和绘制时相同的路径、相同的线宽判断，
-    /// 只额外放宽 1 点（抗锯齿的边缘）。空心的方框、椭圆只认线条本身，里面不算。
+    /// 只额外放宽 1 点（抗锯齿的边缘）。空心的方框、椭圆只认线条本身，里面不算；实心的整块都算。
     func contains(_ point: CGPoint) -> Bool {
         let margin: CGFloat = 1
         func onStroke(_ path: CGPath, width: CGFloat, cap: CGLineCap = .round, join: CGLineJoin = .round) -> Bool {
@@ -37,8 +40,10 @@ extension Annotation {
         }
         switch shape {
         case .rectangle(let rect):
+            if filled { return rect.insetBy(dx: -margin, dy: -margin).contains(point) }
             return onStroke(CGPath(rect: rect, transform: nil), width: lineWidth, join: .miter)
         case .ellipse(let rect):
+            if filled { return CGPath(ellipseIn: rect.insetBy(dx: -margin, dy: -margin), transform: nil).contains(point) }
             return onStroke(CGPath(ellipseIn: rect, transform: nil), width: lineWidth)
         case .mosaic(let rect), .blur(let rect):
             return rect.contains(point)

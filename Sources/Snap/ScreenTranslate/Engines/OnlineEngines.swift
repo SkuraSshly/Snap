@@ -48,8 +48,8 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
                         .init(key: "region", label: "地域", placeholder: "默认 ap-guangzhou", secret: false)]
         case .volcengine: [.init(key: "accessKeyId", label: "Access Key ID", placeholder: "AKLT…", secret: false),
                            .init(key: "secretAccessKey", label: "Secret Access Key", placeholder: "Secret Access Key", secret: true)]
-        case .openAI: [.init(key: "baseURL", label: "Base URL", placeholder: "例如 https://api.deepseek.com/v1", secret: false),
-                       .init(key: "model", label: "模型", placeholder: "例如 deepseek-chat、qwen-plus、moonshot-v1-8k", secret: false),
+        case .openAI: [.init(key: "baseURL", label: "Base URL", placeholder: "例如 https://open.bigmodel.cn/api/paas/v4", secret: false),
+                       .init(key: "model", label: "模型", placeholder: "例如 glm-4-flash、deepseek-chat、qwen-plus", secret: false),
                        .init(key: "apiKey", label: "API Key", placeholder: "sk-…", secret: true)]
         case .claude: [.init(key: "apiKey", label: "API Key", placeholder: "sk-ant-…", secret: true),
                        .init(key: "model", label: "模型", placeholder: "默认 \(ClaudeAPI.defaultModel)", secret: false)]

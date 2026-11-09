@@ -12,6 +12,8 @@ final class AnnotationToolbar: NSView {
     var onSelectColor: ((NSColor) -> Void)?
     /// 拖大小拉条（点，含义按工具不同）
     var onSelectSize: ((CGFloat) -> Void)?
+    /// 点「实心 / 文字背景」开关
+    var onToggleFill: (() -> Void)?
     /// 拖不透明度滑块（0.1 ~ 1）
     var onSelectOpacity: ((CGFloat) -> Void)?
     /// 调色盘里选了颜色；opacity 不为 nil 表示颜色代码里带了不透明度（#RRGGBBAA、rgba）
@@ -25,6 +27,7 @@ final class AnnotationToolbar: NSView {
     private let doneButton = PillButton(title: "完成", symbol: "checkmark", color: WarmPalette.apricot, help: "完成（Enter）")
     private var colorButtons: [SwatchButton] = []
     private let sizeSlider = SizeSlider()
+    private let fillButton = ToolbarButton(symbol: "rectangle.fill", help: "实心")
     private let propertySeparator = WarmSeparator()
     private let customColorButton = CustomColorButton()
     private let opacitySeparator = WarmSeparator()
@@ -103,12 +106,13 @@ final class AnnotationToolbar: NSView {
         addAction(.undo, symbol: "arrow.uturn.backward", help: "撤销（⌘Z）", add: add)
         addAction(.redo, symbol: "arrow.uturn.forward", help: "重做（⌘⇧Z）", add: add)
         separator()
-        addAction(.pin, symbol: "pin", help: "钉在屏幕上", add: add)
-        addAction(.save, symbol: "square.and.arrow.down", help: "保存到文件（⌘S）", add: add)
+        // 长截图放在钉图、下载的左边
         if showsLongCapture {
             addAction(.longCapture, symbol: "scissors", help: "长截图：滚动页面，截取超出屏幕的内容", add: add)
             actionButtons[.longCapture]?.setImage(SnapIcons.longCapture)
         }
+        addAction(.pin, symbol: "pin", help: "钉在屏幕上", add: add)
+        addAction(.save, symbol: "square.and.arrow.down", help: "保存到文件（⌘S）", add: add)
         separator()
         addAction(.cancel, symbol: "xmark", help: "取消（Esc）", add: add)
         doneButton.action = { [weak self] in self?.onAction?(.done) }
@@ -136,6 +140,8 @@ final class AnnotationToolbar: NSView {
         propertyBar.addSubview(propertySeparator)
         sizeSlider.onChange = { [weak self] value in self?.onSelectSize?(value) }
         propertyBar.addSubview(sizeSlider)
+        fillButton.action = { [weak self] in self?.onToggleFill?() }
+        propertyBar.addSubview(fillButton)
         propertyBar.addSubview(opacitySeparator)
         opacitySlider.onChange = { [weak self] value in self?.onSelectOpacity?(value) }
         propertyBar.addSubview(opacitySlider)
@@ -223,6 +229,16 @@ final class AnnotationToolbar: NSView {
         }
         sizeSlider.frame = CGRect(x: x, y: Self.padding, width: SizeSlider.width, height: Self.buttonSize)
         x += SizeSlider.width + Self.spacing
+        // 矩形、椭圆：实心开关；文字：底色开关
+        let showsFill = propertyTool?.supportsFill ?? false
+        fillButton.isHidden = !showsFill
+        if let propertyTool, showsFill {
+            fillButton.setSymbol(propertyTool == .ellipse ? "circle.fill" : propertyTool == .text ? "a.square.fill" : "rectangle.fill")
+            fillButton.toolTip = propertyTool.fillTitle
+            fillButton.isSelected = style.filled
+            fillButton.frame = CGRect(x: x, y: Self.padding, width: Self.buttonSize, height: Self.buttonSize)
+            x += Self.buttonSize + Self.spacing
+        }
         opacitySeparator.isHidden = !showColors
         opacitySlider.isHidden = !showColors
         if showColors {
@@ -241,6 +257,7 @@ final class AnnotationToolbar: NSView {
     func debugToggleColorPicker() { toggleColorPicker() }
     var debugOpacitySlider: OpacitySlider { opacitySlider }
     var debugSizeSlider: SizeSlider { sizeSlider }
+    var debugFillButton: ToolbarButton { fillButton }
     var debugCustomColorButton: CustomColorButton { customColorButton }
     var debugPropertyBarVisible: Bool { !propertyBar.isHidden }
     var debugShowsOpacity: Bool { !opacitySlider.isHidden }

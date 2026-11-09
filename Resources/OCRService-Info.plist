@@ -2,9 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Snap 截屏翻译的文字识别服务：按需启动，空闲 30 秒后自动退出（释放 Vision 模型占用的内存） -->
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh-Hans</string>
+	<key>CFBundleDisplayName</key>
+	<string>Snap 文字识别</string>
 	<key>CFBundleExecutable</key>
 	<string>SnapOCR</string>
 	<key>CFBundleIdentifier</key>
@@ -13,23 +14,20 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>SnapOCR</string>
-	<key>CFBundleDisplayName</key>
-	<string>Snap 文字识别</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>2.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>XPCService</key>
 	<dict>
-		<key>ServiceType</key>
-		<string>Application</string>
-		<!-- 主线程运行 NSRunLoop：识别里用到的拼写检查（NSSpellChecker）需要主线程 -->
 		<key>RunLoopType</key>
 		<string>NSRunLoop</string>
+		<key>ServiceType</key>
+		<string>Application</string>
 	</dict>
 </dict>
 </plist>

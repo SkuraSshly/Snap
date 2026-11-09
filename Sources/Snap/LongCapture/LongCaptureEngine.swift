@@ -36,6 +36,13 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private var lastPreview = ContinuousClock.now
     private var colorSpace: CGColorSpace
 
+    #if DEBUG
+    /// 自测：这个窗口虽然属于 Snap，也要截进来
+    nonisolated(unsafe) static var debugIncludedWindow: CGWindowID?
+    nonisolated(unsafe) static var debugEventLog: [String] = []
+    nonisolated(unsafe) static var debugLostFrames: [PixelFrame] = []
+    #endif
+
     /// 最长：沿滚动方向 20000 像素（Retina 屏上约 10000 点），竖向 1600 像素宽时约 128 MB
     static let maxLength = 20_000
 
@@ -54,7 +61,12 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         }
         let pid = ProcessInfo.processInfo.processIdentifier
         let own = content.applications.filter { $0.processID == pid }
-        let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+        var excepting: [SCWindow] = []
+        #if DEBUG
+        // 自测：截 Snap 自己开的测试页面（平时 Snap 的窗口一律不截）
+        if let id = Self.debugIncludedWindow { excepting = content.windows.filter { $0.windowID == id } }
+        #endif
+        let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: excepting)
         let scale = CGFloat(filter.pointPixelScale)
         let frame = screen.frame
 
@@ -67,15 +79,16 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         config.captureResolution = .best
         config.showsCursor = false
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        let spaceName = screen.canRepresent(.p3) ? CGColorSpace.displayP3 : CGColorSpace.sRGB
-        config.colorSpaceName = spaceName
+        // 不指定色彩空间：按屏幕自己的色彩空间截，不做转换。
+        // 转换（例如内建屏的色彩描述 → Display P3）会加一点抖动，三分之一的像素前后两帧差 1~2 级，
+        // 滚动前后的画面就不再逐像素一致，只能用慢得多的容差比对，快速滚动时跟不上
         // 截得越快，相邻两帧之间页面移动得越少，快速滚动也接得上（拼接一帧只要几毫秒，跟得上）
         let fps = Int32(min(120, max(30, screen.maximumFramesPerSecond)))
         config.minimumFrameInterval = CMTime(value: 1, timescale: fps)
         config.queueDepth = 5
         self.scale = scale
         stitcher = Self.makeStitcher(axis: axis, scale: scale)
-        colorSpace = CGColorSpace(name: spaceName) ?? colorSpace
+        colorSpace = screen.colorSpace?.cgColorSpace ?? colorSpace
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
@@ -117,6 +130,14 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         }
     }
 
+    /// 等已经送来的帧全部拼完（自动滚动判断「这一步滚完了没有」前调用：拼接慢时结果会晚到）
+    /// 返回此刻拼好的长度（像素）：比等主线程收到更新更准
+    func flush() async -> Int {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in continuation.resume(returning: stitcher.length) }
+        }
+    }
+
     /// 拼好的整张图
     func makeImage() async -> CGImage? {
         await withCheckedContinuation { continuation in
@@ -133,7 +154,18 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
 
     /// 拼接一帧，把结果送回主线程（在 queue 上调用）
     private func process(_ frame: PixelFrame) {
-        let event = stitcher.add(frame, hint: hint.map { Int($0.rounded()) })
+        let usedHint = hint.map { Int($0.rounded()) }
+        #if DEBUG
+        let began = ContinuousClock.now
+        #endif
+        let event = stitcher.add(frame, hint: usedHint)
+        #if DEBUG
+        if Self.debugIncludedWindow != nil {
+            let ms = Int(Double((ContinuousClock.now - began).components.attoseconds) / 1e15)
+            Self.debugEventLog.append("\(event) 长度 \(stitcher.length) \(ms)ms")
+            if event == .started || (event == .lost && Self.debugLostFrames.count < 3) { Self.debugLostFrames.append(frame) }
+        }
+        #endif
         // 对上了：提示从这一帧重新算；对不上时继续累计（拼接还是拿上一次对上的帧比）
         if event != .lost { hint = 0 }
         switch event {
@@ -172,7 +204,9 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer)
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let data = Data(bytes: base, count: bytesPerRow * height)
-        return PixelFrame(width: width, height: height, bytesPerRow: bytesPerRow, data: data, colorSpace: colorSpace)
+        // 帧上带着它的色彩空间时用帧上的（输出的长图按它标记颜色）
+        let space = CVImageBufferGetColorSpace(pixelBuffer)?.takeUnretainedValue() ?? colorSpace
+        return PixelFrame(width: width, height: height, bytesPerRow: bytesPerRow, data: data, colorSpace: space)
     }
 }
 

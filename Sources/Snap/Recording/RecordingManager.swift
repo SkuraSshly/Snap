@@ -118,6 +118,9 @@ final class RecordingManager: ObservableObject {
                 state = .recording
                 highlighter?.start()
                 showControlBar(for: target)
+                // 控制条、红框出来后换成「只排除它们」：录制中用 Snap 截图、截屏翻译时，截图界面、标注、
+                // 翻译结果、缩略图、钉图都会录进视频（录的就是屏幕上看到的）；只有录屏自己的控制条和红框不录
+                await includeSnapWindows(target)
                 let s = recorder.settings
                 Log.capture.notice("开始录制：\(s.pixelWidth)×\(s.pixelHeight) 像素，\(s.fps) fps，\(s.codec == .hevc ? "HEVC" : "H.264", privacy: .public)，码率 \(ScreenRecorder.bitRate(for: s) / 1_000_000) Mbps，系统声音 \(s.capturesSystemAudio)，麦克风 \(s.capturesMicrophone)，点击高亮 \(self.highlighter != nil)")
             } catch {
@@ -127,6 +130,25 @@ final class RecordingManager: ObservableObject {
                 Log.capture.error("录制无法开始：\(error.localizedDescription, privacy: .public)")
                 showError("录屏无法开始", error)
             }
+        }
+    }
+
+    /// 录制中：只排除录屏自己的控制条和红框，Snap 的其他窗口（截图界面、翻译结果、缩略图、钉图……）照常录进去
+    private func includeSnapWindows(_ target: RecordingTarget) async {
+        guard let recorder else { return }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            guard let display = content.displays.first(where: { $0.displayID == target.displayID }) else { return }
+            let chrome = Set([controlBar?.windowNumber, frameWindow?.windowNumber].compactMap { $0 }.map { CGWindowID($0) })
+            let excluded = content.windows.filter { chrome.contains($0.windowID) }
+            guard excluded.count == chrome.count else {
+                Log.capture.error("录屏：找不到控制条或红框的窗口，保持排除 Snap 的所有窗口")
+                return
+            }
+            try await recorder.updateFilter(SCContentFilter(display: display, excludingWindows: excluded))
+            Log.capture.notice("录屏：录制中使用截图、截屏翻译会录进视频（控制条、红框除外）")
+        } catch {
+            Log.capture.error("录屏：更新录制范围失败 \(error.localizedDescription, privacy: .public)")
         }
     }
 

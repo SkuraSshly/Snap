@@ -53,15 +53,25 @@ final class AnnotationRenderer {
 
         switch annotation.shape {
         case .rectangle(let rect):
-            ctx.setStrokeColor(color)
-            ctx.setLineWidth(annotation.lineWidth)
-            ctx.setLineJoin(.miter)
-            ctx.stroke(rect)
+            if annotation.filled {
+                ctx.setFillColor(color)
+                ctx.fill(rect)
+            } else {
+                ctx.setStrokeColor(color)
+                ctx.setLineWidth(annotation.lineWidth)
+                ctx.setLineJoin(.miter)
+                ctx.stroke(rect)
+            }
 
         case .ellipse(let rect):
-            ctx.setStrokeColor(color)
-            ctx.setLineWidth(annotation.lineWidth)
-            ctx.strokeEllipse(in: rect)
+            if annotation.filled {
+                ctx.setFillColor(color)
+                ctx.fillEllipse(in: rect)
+            } else {
+                ctx.setStrokeColor(color)
+                ctx.setLineWidth(annotation.lineWidth)
+                ctx.strokeEllipse(in: rect)
+            }
 
         case .line(let from, let to):
             ctx.setStrokeColor(color)
@@ -87,10 +97,20 @@ final class AnnotationRenderer {
 
         case .text(let string, let topLeft):
             let attributed = NSAttributedString(string: string,
-                                                attributes: Annotation.textAttributes(color: annotation.color,
+                                                attributes: Annotation.textAttributes(color: annotation.textForeground,
                                                                                       fontSize: annotation.fontSize))
             let size = Self.textSize(attributed)
-            drawText(attributed, in: CGRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height), ctx: ctx)
+            let textRect = CGRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
+            if annotation.filled {
+                // 底色：比文字大一圈的圆角块，颜色就是所选颜色
+                let pad = Annotation.textBackgroundPadding(fontSize: annotation.fontSize)
+                let box = textRect.insetBy(dx: -pad.width, dy: -pad.height)
+                let radius = annotation.fontSize * 0.22
+                ctx.setFillColor(color)
+                ctx.addPath(CGPath(roundedRect: box, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                ctx.fillPath()
+            }
+            drawText(attributed, in: textRect, ctx: ctx)
 
         case .counter(let number, let center):
             let r = annotation.counterRadius

@@ -319,7 +319,21 @@ enum DebugUITest {
                     let visible = z.contentView.documentVisibleRect
                     check("长截图编辑窗口：按宽度原大小打开、只显示一部分", long.debugCanvas.frame.width == 300 && z.frame.height < 3000
                           && z.minMagnification < 1, "\(long.debugCanvas.frame) \(z.frame)")
-                    check("长截图编辑窗口：从最上面看起", abs(visible.maxY - 3000) < 1, "\(visible)")
+                    check("长截图编辑窗口：从最上面看起", abs(visible.maxY - (3000 + AnnotationEditorWindowController.margin * 2)) < 1, "\(visible)")
+                    check("长截图编辑窗口：右边有暖色滚动条，下面没有", z.verticalScroller is WarmScroller
+                          && z.verticalScroller?.isHidden == false && z.horizontalScroller?.isHidden != false,
+                          "竖 \(String(describing: z.verticalScroller?.isHidden)) 横 \(String(describing: z.horizontalScroller?.isHidden))")
+                    let canvasInWindow = long.debugCanvas.convert(long.debugCanvas.bounds, to: nil)
+                    let zoomInWindow = z.convert(z.bounds, to: nil)
+                    check("长截图编辑窗口：图片四周留出暖色边距（看得清边界）",
+                          canvasInWindow.minX - zoomInWindow.minX >= AnnotationEditorWindowController.margin - 0.5,
+                          "\(canvasInWindow) \(zoomInWindow)")
+                    long.canvasMouseDown(at: CGPoint(x: 250, y: 2900))
+                    long.canvasMouseDragged(to: CGPoint(x: 600, y: 3400))
+                    long.canvasMouseUp(at: CGPoint(x: 600, y: 3400))
+                    let drawn = long.debugAnnotator.document.annotations.last?.bounds ?? .null
+                    check("编辑窗口：拖到图片外面，标注停在图片边上", drawn.maxX <= 305 && drawn.maxY <= 3005, "\(drawn)")
+                    await captureComposite(around: long.debugWindow.frame, to: dir.appendingPathComponent("9c-长截图编辑窗口.png"))
                     for _ in 0..<40 { if let down = scroll(-10, option: true) { z.scrollWheel(with: down) } }
                     let all = z.contentView.documentVisibleRect
                     check("长截图编辑窗口：按住 ⌥ 往下滚能缩小到看全整张", z.magnification == z.minMagnification
@@ -1075,11 +1089,11 @@ enum DebugUITest {
 
         session.debugFeed(screenFrame(9 * step + viewLines * 2))
         try? await Task.sleep(for: .milliseconds(300))
-        check("一下滚太远：提示往回滚", session.debugOverlay.message?.contains("滚动太快") == true)
+        check("一下滚太远：不出提示（过程中保持干净），长度不变", session.debugOverlay.message == nil)
 
         session.debugSetAxis(.horizontal)
         try? await Task.sleep(for: .milliseconds(200))
-        check("换成横向：从头开始，提示「向右滚动」", session.debugOverlay.message?.contains("向右滚动") == true
+        check("换成横向：从头开始，不再出提示", session.debugOverlay.message == nil
               && session.debugLength == 0 && session.debugBar.debugLengthText == "等待滚动…")
 
         // Esc：长截图期间注册成临时全局快捷键（焦点在被截的 App 里），按下就取消；结束后注销
@@ -1090,6 +1104,60 @@ enum DebugUITest {
         check("按 Esc 取消长截图，Esc 随即注销", HotkeyManager.shared.debugTemporaryCount == 0)
         check("取消：长截图界面全部关闭", finished && !session.debugBar.isVisible && !session.debugOverlay.isVisible
               && !session.debugPreview.isVisible)
+
+        // 「编辑」：结束长截图，直接用编辑窗口打开拼好的整张图
+        let editSession = LongCaptureSession(region: region, screen: screen)
+        var editFinished = false
+        editSession.onFinish = { editFinished = true }
+        editSession.debugStartWithoutCapture()
+        for k in 0..<4 { editSession.debugFeed(screenFrame(k * step)) }
+        try? await Task.sleep(for: .milliseconds(400))
+        editSession.debugBar.debugTapEdit()
+        try? await Task.sleep(for: .milliseconds(800))
+        let editor = NSApp.windows.first { $0.title == "编辑截图" && $0.isVisible }
+        check("长截图点「编辑」：长截图界面关闭，打开编辑窗口", editFinished && editor != nil && !editSession.debugBar.isVisible)
+        editor?.close()
+
+        // 「钉图」：结束长截图，把整张长图钉在屏幕上
+        let pinSession = LongCaptureSession(region: region, screen: screen)
+        var pinFinished = false
+        pinSession.onFinish = { pinFinished = true }
+        pinSession.debugStartWithoutCapture()
+        for k in 0..<4 { pinSession.debugFeed(screenFrame(k * step)) }
+        try? await Task.sleep(for: .milliseconds(400))
+        let pinsBefore = PinManager.shared.count
+        pinSession.debugBar.debugTapPin()
+        try? await Task.sleep(for: .milliseconds(800))
+        check("长截图点「钉图」：长截图界面关闭，整张图钉在屏幕上", pinFinished && PinManager.shared.count == pinsBefore + 1
+              && !pinSession.debugBar.isVisible, "钉图 \(pinsBefore) → \(PinManager.shared.count)")
+        NSApp.windows.compactMap { $0 as? PinWindow }.last?.close()
+
+        // 长截图钉到屏幕上：宽度按原大小（不超过屏幕的 45%），高度不超过屏幕的 85%，滚轮在窗口里翻看，⌥ + 滚轮缩放
+        if let space = CGColorSpace(name: CGColorSpace.sRGB),
+           let ctx = CGContext(data: nil, width: 300, height: 3000, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.setFillColor(CGColor(gray: 0.95, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: 300, height: 3000))
+            if let tall = ctx.makeImage(),
+               let pin = PinManager.shared.pin(CapturedImage(image: tall, scale: 1,
+                                                             sourceRect: CGRect(x: region.minX, y: region.minY, width: 300, height: 3000))),
+               let view = pin.contentView as? PinView {
+                try? await Task.sleep(for: .milliseconds(200))
+                let visibleFrame = pin.screen?.visibleFrame ?? screen.visibleFrame
+                check("长截图钉图：原宽度、高度不超出屏幕", view.debugIsLong && pin.frame.width == 300
+                      && pin.frame.height <= visibleFrame.height * 0.85 + 1 && visibleFrame.contains(pin.frame), "\(pin.frame)")
+                func wheel(_ amount: Int32, option: Bool) -> NSEvent? {
+                    let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)
+                    cg?.flags = option ? .maskAlternate : []
+                    return cg.flatMap(NSEvent.init(cgEvent:))
+                }
+                if let down = wheel(-120, option: false) { view.scrollWheel(with: down) }
+                check("长截图钉图：滚轮在窗口里往下翻", view.debugScrollOffset > 0 && view.debugZoom == 1, "\(view.debugScrollOffset)")
+                if let zoomOut = wheel(-40, option: true) { view.scrollWheel(with: zoomOut) }
+                check("长截图钉图：⌥ + 滚轮缩放", view.debugZoom < 1 && pin.frame.width < 300, "\(view.debugZoom)")
+                pin.close()
+            }
+        }
     }
 
     /// 识别服务进程（SnapOCR.xpc）是否在运行
@@ -1515,7 +1583,25 @@ enum DebugUITest {
         if let up = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0)
             .flatMap(NSEvent.init(cgEvent:)) { sizeSlider.scrollWheel(with: up) }
         check("在拉条上滚动一次：减 1 点", annotator.style.size == 29, "\(annotator.style.size)")
+        // 实心 / 文字底色：矩形、椭圆、文字有开关，箭头没有；实心的整块都能点中
+        let fill = toolbar.debugFillButton
+        check("矩形：有「实心」开关", !fill.isHidden && !fill.isSelected && fill.toolTip == "实心")
+        fill.action?()
+        check("点「实心」：当前样式变成实心", annotator.style.filled && fill.isSelected)
+        drag(g(150, 140), g(175, 160))
+        let solid = document.annotations.last
+        check("新画的矩形是实心，点里面也能选中", solid?.filled == true && solid?.contains(CGPoint(x: 162, y: 150)) == true)
+        render("10j-实心矩形")
+        _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
+        fill.action?()
+        check("再点一次：回到空心", !annotator.style.filled)
+        session.debugSelectTool(.arrow)
+        check("箭头没有填充开关", fill.isHidden)
         session.debugSelectTool(.text)
+        check("文字：开关是「文字背景」", !fill.isHidden && fill.toolTip?.contains("文字背景") == true)
+        check("底色上的文字自动用白 / 黑字（黄底黑字、红底白字）",
+              Annotation.textColor(onBackground: AnnotationPalette.colors[1]) == .black
+              && Annotation.textColor(onBackground: AnnotationPalette.colors[0]) == .white)
         check("文字：拉条是「字号 10–120」", sizeSlider.title == "字号" && sizeSlider.minimum == 10 && sizeSlider.maximum == 120)
         // 旧版本保存的三档（size: 0 / 1 / 2）读出来换算成数值
         ToolStyleMemory.debugStoreRaw(["rectangle": ["color": "#FF3B30", "size": 2, "opacity": 1.0],
@@ -1994,12 +2080,19 @@ enum DebugRecordingTest {
         controlBar.debugClickPause()
         check("再点继续录制，红框恢复实线", manager.state == .recording && !frameWindow.debugIsDashed)
         let soundStart = manager.elapsed
+        // 录制中 Snap 自己的窗口（截图界面、翻译结果、缩略图……）要录进视频：盖一块绿色的 Snap 窗口在录制区域上
+        let marker = NSPanel(contentRect: region, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        marker.isReleasedWhenClosed = false
+        marker.level = .floating
+        marker.backgroundColor = NSColor(srgbRed: 0, green: 0.8, blue: 0.2, alpha: 1)
+        marker.orderFrontRegardless()
         let player = Process()
         player.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
         player.arguments = ["/System/Library/Sounds/Tink.aiff"]
         try? player.run()
         try? await Task.sleep(for: .milliseconds(1200))
         let wallDuration = Date().timeIntervalSince(wallStart)
+        defer { marker.close() }
         let elapsedBeforeStop = manager.elapsed
         coordinator.handleHotkey(.recording)
         try? await Task.sleep(for: .milliseconds(1500))
@@ -2028,6 +2121,23 @@ enum DebugRecordingTest {
         check("暂停的 1.5 秒不在视频里（从按 Enter 起经过 \(String(format: "%.1f", wallDuration)) 秒，视频 \(String(format: "%.2f", duration)) 秒）",
               duration < wallDuration - 1.2 && abs(duration - elapsedBeforeStop) < 0.3, "计时 \(elapsedBeforeStop) 秒")
         Log.capture.notice("录屏文件参数：\(Int(size.width))×\(Int(size.height))，\(String(format: "%.2f", duration)) 秒，平均 \(String(format: "%.1f", fps)) fps，色域 \(primaries, privacy: .public)")
+
+        // 最后一帧的中心：应该是那块绿色的 Snap 窗口（只比对这一个像素的数值）
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let lastTime = CMTime(seconds: max(0, duration - 0.15), preferredTimescale: 600)
+        if let frame = try? await generator.image(at: lastTime).image,
+           let ctx = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                               space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.draw(frame, in: CGRect(x: -CGFloat(frame.width / 2), y: -CGFloat(frame.height / 2),
+                                       width: CGFloat(frame.width), height: CGFloat(frame.height)))
+            let px = ctx.data!.bindMemory(to: UInt8.self, capacity: 4)
+            let (r, gr, b) = (Int(px[0]), Int(px[1]), Int(px[2]))
+            check("录制中 Snap 的窗口会录进视频（截图、翻译界面都能录到）", gr > 150 && gr - r > 60 && gr - b > 60, "中心像素 \(r),\(gr),\(b)")
+        } else {
+            check("录制中 Snap 的窗口会录进视频（截图、翻译界面都能录到）", false, "读不出最后一帧")
+        }
 
         let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
         if Preferences.shared.recordSystemAudio {
@@ -2197,6 +2307,23 @@ final class MockLLMServer: URLProtocol, @unchecked Sendable {
 }
 #endif
 #if DEBUG
+/// 测试版第一次运行：申请屏幕录制、辅助功能权限（系统设置里显示「Snap 测试版」），把结果写进文件后退出。
+/// 用法：open --env SNAP_REQUEST_SCREEN=/输出目录 build/Snap.app
+enum DebugPermissionRequest {
+    static func runIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["SNAP_REQUEST_SCREEN"] else { return }
+        let granted = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
+        // 自动滚动的诊断要发滚动事件：同时申请辅助功能
+        let accessibility = CGPreflightPostEventAccess() || CGRequestPostEventAccess()
+        try? "屏幕录制权限：\(granted)，辅助功能：\(accessibility)".write(to: URL(fileURLWithPath: path).appendingPathComponent("result.txt"),
+                                          atomically: true, encoding: .utf8)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            NSApp.terminate(nil)
+        }
+    }
+}
+
 /// 诊断：自动滚动发出的滚动事件能不能让页面动起来。
 /// 在屏幕中间开一个 Snap 自己的测试窗口（很长的可滚动页面，不涉及用户内容），把指针移过去，按自动滚动的方式发事件，
 /// 记下页面滚了多少。用法：open --env SNAP_AUTOSCROLL_PROBE=/输出目录 build/Snap.app
@@ -2303,6 +2430,30 @@ enum DebugAutoScrollProbe {
                 e.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
                 e.postToPid(ProcessInfo.processInfo.processIdentifier)
             }
+            // 指针放在窗口外面：哪种发法能让窗口里的页面滚动、又不把指针拉过去
+            let away = CGPoint(x: center.x + 320, y: center.y)
+            func outside(_ name: String, tap: CGEventTapLocation?, toPid: Bool) async {
+                CGWarpMouseCursorPosition(away)
+                CGAssociateMouseAndMouseCursorPosition(1)
+                try? await Task.sleep(for: .milliseconds(150))
+                document.scroll(CGPoint(x: 0, y: 1500))
+                try? await Task.sleep(for: .milliseconds(100))
+                let before = offset()
+                for k in 0..<8 {
+                    guard let e = phased(k, -60) else { continue }
+                    e.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+                    e.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
+                    if toPid { e.postToPid(ProcessInfo.processInfo.processIdentifier) } else if let tap { e.post(tap: tap) }
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                try? await Task.sleep(for: .milliseconds(300))
+                let cursor = CGEvent(source: nil)?.location ?? .zero
+                lines.append("\(name)：页面移动 \(Int(offset() - before)) 点，指针被拉走 \(Int(hypot(cursor.x - away.x, cursor.y - away.y))) 点")
+            }
+            await outside("Q1 指针在外面，手势事件发到 HID 层", tap: .cghidEventTap, toPid: false)
+            await outside("Q2 指针在外面，发到会话层", tap: .cgSessionEventTap, toPid: false)
+            await outside("Q3 指针在外面，发到注解会话层", tap: .cgAnnotatedSessionEventTap, toPid: false)
+            await outside("Q4 指针在外面，直接发给程序", tap: nil, toPid: true)
             // 直接调用滚动视图（排除「滚动视图本身不响应」）
             let before = offset()
             if let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0),
@@ -2356,6 +2507,241 @@ enum DebugAutoScrollProbe {
                 (i % 2 == 0 ? NSColor.systemOrange : NSColor.white).setFill()
                 CGRect(x: 0, y: CGFloat(i) * 40, width: bounds.width, height: 40).fill()
             }
+        }
+    }
+}
+
+/// 端到端自测：自动滚动能不能把一整页完整、正确地拼出来。
+/// 打开 Snap 自己的测试页面（6000 点高、每行内容都不一样，不涉及用户内容），在上面真的开始长截图、点「自动滚动」，
+/// 等它自己停下，检查拼出来的长度 = 整页高度、中途没有报「没接上」。分别用三档速度各测一次。
+/// 测试需要指针在页面上（测试开始时移过去一次，之后不再移动）。用法：open --env SNAP_AUTOSCROLL_E2E=/输出目录 build/Snap.app
+enum DebugAutoScrollE2E {
+    static func runIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["SNAP_AUTOSCROLL_E2E"] else { return }
+        let dir = URL(fileURLWithPath: path, isDirectory: true)
+        Task { @MainActor in
+            var lines: [String] = []
+            let check = DebugUITest.Checks()
+            let savedSpeed = Preferences.shared.longCaptureAutoSpeed
+            let pageHeight: CGFloat = 6000
+            // 每块屏幕都测（Retina 屏上选区常落在半点上）；屏幕高度是奇数时测试窗口正好落在半点上
+            for screen in NSScreen.screens {
+            lines.append("【屏幕 \(screen.frame)，\(screen.backingScaleFactor)x】")
+            // 手动猛甩：鼠标滚轮 / 触控板以远超人手的速度往下滚，限速要保证一行不漏
+            for (name, continuous) in [("触控板", true), ("鼠标滚轮", false)] {
+                let r = await manualFling(screen: screen, pageHeight: pageHeight, continuous: continuous, dir: dir)
+                lines.append("手动猛甩（\(name)）：拼出 \(r.length) 像素（整页 \(r.expected)），页面滚到 \(Int(r.offset))，提示「\(r.message)」")
+                // 限速会丢掉积压过多的部分，页面不一定滚到底；要求是：页面滚过的每一行都拼进来了
+                let scrolled = Int((r.offset + 400) * screen.backingScaleFactor)
+                check("\(Int(screen.backingScaleFactor))x 屏 手动猛甩（\(name)）：页面滚过的内容全部拼上（\(r.length) 像素）", abs(r.length - scrolled) <= 2, "\(r.length) / \(scrolled)")
+                check("\(Int(screen.backingScaleFactor))x 屏 手动猛甩（\(name)）：内容和页面一致", r.correct.ok, r.correct.detail)
+            }
+            for speed in [ScrollSpeed.normal, .fast, .slow] {
+                Preferences.shared.longCaptureAutoSpeed = speed
+                let frame = CGRect(x: screen.frame.midX - 250, y: screen.frame.midY - 200, width: 500, height: 400)
+                let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.level = .floating
+                window.isReleasedWhenClosed = false
+                let scroll = NSScrollView(frame: CGRect(origin: .zero, size: frame.size))
+                let document = PageView(frame: CGRect(x: 0, y: 0, width: 500, height: pageHeight))
+                scroll.documentView = document
+                window.contentView = scroll
+                window.orderFrontRegardless()
+                document.scroll(.zero)
+                LongCaptureEngine.debugIncludedWindow = CGWindowID(window.windowNumber)
+                try? await Task.sleep(for: .milliseconds(500))
+                let region = window.frame
+                lines.append("  选区 \(region)，屏幕 \(screen.frame)（\(screen.backingScaleFactor)x），窗口所在屏幕 \(window.screen?.frame ?? .zero)，所有屏幕 \(NSScreen.screens.map { "\($0.frame) \($0.backingScaleFactor)x" })")
+                let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+                CGWarpMouseCursorPosition(CGPoint(x: region.midX, y: primaryHeight - region.midY))
+                CGAssociateMouseAndMouseCursorPosition(1)
+                let session = LongCaptureSession(region: region, screen: screen)
+                session.start()
+                try? await Task.sleep(for: .milliseconds(800))
+                let started = ContinuousClock.now
+                session.debugToggleAutoScroll()
+                var sawMessage = false
+                var trace: [String] = []
+                while session.debugIsAutoScrolling, ContinuousClock.now - started < .seconds(60) {
+                    if trace.count < 30 {
+                        let loc = NSEvent.mouseLocation
+                        trace.append("\(Int(scroll.contentView.bounds.origin.y))\(region.contains(loc) ? "" : "(指针在外)")")
+                    }
+                    if session.debugOverlay.message != nil { sawMessage = true }
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                let seconds = Double((ContinuousClock.now - started).components.attoseconds) / 1e18
+                    + Double((ContinuousClock.now - started).components.seconds)
+                try? await Task.sleep(for: .milliseconds(300))
+                let scale = screen.backingScaleFactor
+                let expected = Int(pageHeight * scale)
+                let length = session.debugLength
+                let message = session.debugOverlay.message ?? ""
+                let offset = scroll.contentView.bounds.origin.y
+                lines.append("  页面位置（每 50 毫秒）：" + trace.joined(separator: " "))
+                lines.append("速度「\(speed.title)」：用时 \(String(format: "%.1f", seconds)) 秒，拼出 \(length) 像素（整页 \(expected)），"
+                             + "页面滚到 \(Int(offset))，提示「\(message)」")
+                check("\(Int(screen.backingScaleFactor))x 屏 自动滚动（\(speed.title)）：一路拼到页面底部，长度正确", abs(length - expected) <= Int(scale * 2),
+                      "\(length) / \(expected)")
+                check("\(Int(screen.backingScaleFactor))x 屏 自动滚动（\(speed.title)）：到底后自己停下（不是因为没接上）", session.autoStopReason == .end,
+                      "\(String(describing: session.autoStopReason))")
+                check("\(Int(screen.backingScaleFactor))x 屏 自动滚动（\(speed.title)）：过程中不出任何提示", !sawMessage && message.isEmpty, message)
+                // 拼出来的图逐行比对：和页面本身一致（每行都不一样，错位就对不上）
+                if let image = await session.debugImage() {
+                    let correct = PageView.verify(image, scale: scale)
+                    check("\(Int(screen.backingScaleFactor))x 屏 自动滚动（\(speed.title)）：拼出来的内容和页面一致（没有错位、重复、缺行）", correct.ok, correct.detail)
+                }
+                // 诊断：事件序列（相同的连续事件合并）和前几个没对上的帧
+                var compact: [String] = []
+                for e in LongCaptureEngine.debugEventLog {
+                    if let lastLine = compact.last, lastLine.hasPrefix(e + " ×") || lastLine == e {
+                        let n = (Int(lastLine.split(separator: "×").last.map(String.init) ?? "") ?? 1) + 1
+                        compact[compact.count - 1] = e + " ×\(n)"
+                    } else { compact.append(e) }
+                }
+                lines.append("  事件（最后 25 个）：" + compact.suffix(25).joined(separator: " | "))
+                for (k, f) in LongCaptureEngine.debugLostFrames.enumerated() {
+                    let provider = CGDataProvider(data: f.data as CFData)!
+                    if let img = CGImage(width: f.width, height: f.height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: f.bytesPerRow,
+                                         space: f.colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+                                         provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
+                        try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?
+                            .write(to: dir.appendingPathComponent("lost-\(speed.rawValue)-\(f.width)-\(k).png"))
+                    }
+                }
+                LongCaptureEngine.debugEventLog = []
+                LongCaptureEngine.debugLostFrames = []
+                session.debugCancel()
+                window.close()
+                LongCaptureEngine.debugIncludedWindow = nil
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+            }
+            Preferences.shared.longCaptureAutoSpeed = savedSpeed
+            lines.append(contentsOf: check.lines)
+            try? lines.joined(separator: "\n").write(to: dir.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
+            DebugUITest.quitAfterTest()
+        }
+    }
+
+    @MainActor
+    private static func manualFling(screen: NSScreen, pageHeight: CGFloat, continuous: Bool, dir: URL)
+        async -> (length: Int, expected: Int, offset: CGFloat, message: String, correct: (ok: Bool, detail: String)) {
+        let frame = CGRect(x: screen.frame.midX - 250, y: screen.frame.midY - 200, width: 500, height: 400)
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        let scroll = NSScrollView(frame: CGRect(origin: .zero, size: frame.size))
+        let document = PageView(frame: CGRect(x: 0, y: 0, width: 500, height: pageHeight))
+        scroll.documentView = document
+        window.contentView = scroll
+        window.orderFrontRegardless()
+        document.scroll(.zero)
+        LongCaptureEngine.debugIncludedWindow = CGWindowID(window.windowNumber)
+        try? await Task.sleep(for: .milliseconds(500))
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let center = CGPoint(x: frame.midX, y: primaryHeight - frame.midY)
+        CGWarpMouseCursorPosition(center)
+        CGAssociateMouseAndMouseCursorPosition(1)
+        let session = LongCaptureSession(region: frame, screen: screen)
+        session.start()
+        try? await Task.sleep(for: .milliseconds(800))
+        // 每 8 毫秒一次、每次 400 点：每秒 5 万点，远超人手
+        for k in 0..<60 {
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -400, wheel2: 0, wheel3: 0)
+            else { continue }
+            if continuous {
+                event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                event.setIntegerValueField(.scrollWheelEventScrollPhase, value: k == 0 ? 1 : 2)
+            }
+            event.location = center
+            event.post(tap: .cghidEventTap)
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+        if continuous, let end = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0) {
+            end.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            end.setIntegerValueField(.scrollWheelEventScrollPhase, value: 4)
+            end.location = center
+            end.post(tap: .cghidEventTap)
+        }
+        // 等限速把积压的滚动补发完、画面稳定
+        var lastLength = -1, stableSince = ContinuousClock.now
+        let started = ContinuousClock.now
+        while ContinuousClock.now - started < .seconds(30) {
+            if session.debugLength != lastLength { lastLength = session.debugLength; stableSince = .now }
+            if ContinuousClock.now - stableSince > .seconds(2) { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let scale = screen.backingScaleFactor
+        let image = await session.debugImage()
+        let result = (length: session.debugLength, expected: Int(pageHeight * scale), offset: scroll.contentView.bounds.origin.y,
+                      message: session.debugOverlay.message ?? "",
+                      correct: image.map { PageView.verify($0, scale: scale) } ?? (false, "没有图"))
+        LongCaptureEngine.debugEventLog = []
+        LongCaptureEngine.debugLostFrames = []
+        session.debugCancel()
+        window.close()
+        LongCaptureEngine.debugIncludedWindow = nil
+        try? await Task.sleep(for: .milliseconds(400))
+        return result
+    }
+
+    /// 测试页面：每 20 点一行文字，左边小方块的颜色由行号算出（相邻行都不同）
+    private final class PageView: NSView {
+        override var isFlipped: Bool { true }
+        static let rowHeight: CGFloat = 20
+
+        static func color(_ row: Int) -> (r: CGFloat, g: CGFloat, b: CGFloat) {
+            var h = UInt32(truncatingIfNeeded: row &* 2654435761)
+            h ^= h >> 13
+            return (CGFloat(h & 0xFF) / 255, CGFloat((h >> 8) & 0xFF) / 255, CGFloat((h >> 16) & 0xFF) / 255)
+        }
+
+        private static let words = ["长截图", "Snap", "滚动", "拼接", "页面", "测试", "暖色", "编辑", "macOS", "截图", "一行文字",
+                                    "Lorem", "ipsum", "dolor", "自动", "稳定", "像素", "内容", "窗口", "标注"]
+
+        /// 像真实网页一样：白底、每行一句不一样的文字，左边一个按行号变色的小方块（用来逐行核对）
+        override func draw(_ dirtyRect: NSRect) {
+            // 只画在页面范围里（真实网页滚过头时露出的是空白背景）
+            let rect = dirtyRect.intersection(bounds)
+            guard !rect.isEmpty else { return }
+            NSColor.white.setFill()
+            rect.fill()
+            let first = max(0, Int(rect.minY / Self.rowHeight))
+            let last = min(Int(rect.maxY / Self.rowHeight), Int(bounds.height / Self.rowHeight) - 1)
+            guard first <= last else { return }
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.black]
+            for row in first...last {
+                let c = Self.color(row)
+                NSColor(srgbRed: c.r, green: c.g, blue: c.b, alpha: 1).setFill()
+                CGRect(x: 2, y: CGFloat(row) * Self.rowHeight + 4, width: 12, height: 12).fill()
+                var text = "第 \(row) 行"
+                for k in 0..<(3 + row % 5) { text += " " + Self.words[(row * 7 + k * 13) % Self.words.count] }
+                (text as NSString).draw(at: CGPoint(x: 22, y: CGFloat(row) * Self.rowHeight + 2), withAttributes: attributes)
+            }
+        }
+
+        /// 检查拼好的图：每一行中间那条像素的颜色，和页面上第几行的颜色对得上（色彩空间转换留容差）
+        static func verify(_ image: CGImage, scale: CGFloat) -> (ok: Bool, detail: String) {
+            let width = image.width, height = image.height
+            guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  let data = { ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height)); return ctx.data }()
+            else { return (false, "读不出像素") }
+            let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+            let rows = Int(CGFloat(height) / (rowHeight * scale))
+            var bad: [Int] = []
+            for row in 0..<rows {
+                // 第 row 行左边小方块的中心
+                let y = Int((CGFloat(row) * rowHeight + 10) * scale), x = Int(8 * scale)
+                guard y < height else { break }
+                let i = (y * width + x) * 4   // CGContext 的第 0 行是图片最上面
+                let c = color(row)
+                let d = abs(Int(pixels[i]) - Int(c.r * 255)) + abs(Int(pixels[i + 1]) - Int(c.g * 255)) + abs(Int(pixels[i + 2]) - Int(c.b * 255))
+                if d > 60 { bad.append(row) }
+            }
+            return (bad.isEmpty, bad.isEmpty ? "\(rows) 行都对" : "\(bad.count)/\(rows) 行不对，例如第 \(bad.prefix(5).map(String.init).joined(separator: "、")) 行")
         }
     }
 }

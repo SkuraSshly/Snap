@@ -26,6 +26,7 @@ ditto build/Snap.app "$STAGING/Snap.app"
 ln -s /Applications "$STAGING/应用程序"
 cp docs/使用说明.md "$STAGING/使用说明.md"
 cp docs/卸载说明.md "$STAGING/卸载说明.md"
+cp docs/更新说明.md "$STAGING/更新说明.md"
 # 新系统用 diskutil image（hdiutil create 已标记为过时），旧系统退回 hdiutil
 if diskutil image create from -h >/dev/null 2>&1; then
   diskutil image create from --format UDZO --volumeName "Snap $VERSION" "$STAGING" "$DMG" >/dev/null; echo

@@ -30,7 +30,15 @@ final class PinManager {
         // 原位只要在屏幕范围内就行（盖住程序坞也没关系，与 Snipaste 一致）
         let fitsInPlace = screen.frame.contains(frame)
             && size.width <= visible.width * 0.8 && size.height <= visible.height * 0.8
-        if !fitsInPlace {
+        if let axis = PinView.longAxis(for: size) {
+            // 长截图：整张缩进屏幕会细得看不清。按能看清的大小显示（最多原大小），只露出一段，在窗口里滚动翻看
+            let zoom = axis == .vertical ? min(1, visible.width * 0.45 / size.width) : min(1, visible.height * 0.45 / size.height)
+            let shown = axis == .vertical
+                ? CGSize(width: (size.width * zoom).rounded(), height: min((size.height * zoom).rounded(), (visible.height * 0.85).rounded()))
+                : CGSize(width: min((size.width * zoom).rounded(), (visible.width * 0.85).rounded()), height: (size.height * zoom).rounded())
+            frame = CGRect(x: (visible.midX - shown.width / 2).rounded(), y: (visible.midY - shown.height / 2).rounded(),
+                           width: shown.width, height: shown.height)
+        } else if !fitsInPlace {
             let factor = min(visible.width * 0.6 / size.width, visible.height * 0.6 / size.height, 1)
             let fitted = CGSize(width: (size.width * factor).rounded(), height: (size.height * factor).rounded())
             // 坐标取整：带 0.5 的位置会被系统对齐到整点，导致窗口尺寸多出 1 点

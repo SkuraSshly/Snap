@@ -35,7 +35,7 @@ struct TranslateSettingsView: View {
             }
 
             SettingsSection(title: "翻译引擎",
-                            footer: "Apple 翻译离线、免费。在线引擎默认全部关闭；启用并填写 Key 后才会联网，原文只发送给所选的服务商。Key 保存在钥匙串里。默认引擎失败时会自动换到下一个可用的引擎。") {
+                            footer: "Apple 翻译离线、免费。需要 Key 的在线引擎都在「在线翻译」里：先选服务商，填写 Key 后打开开关；可以启用多个。启用后才会联网，原文只发送给所选的服务商，Key 保存在钥匙串里。默认引擎失败时会自动换到下一个可用的引擎。") {
                 SettingsRow(icon: "star.fill", tint: .apricot, title: "默认引擎", isFirst: true) {
                     Picker("", selection: $prefs.defaultEngine) {
                         ForEach(engines.selectable) { Text($0.displayName).tag($0.rawValue) }
@@ -43,12 +43,7 @@ struct TranslateSettingsView: View {
                     .labelsHidden()
                     .fixedSize()
                 }
-                ForEach(EngineID.allCases.filter { $0 != .apple }) { engine in
-                    EngineRow(engine: engine, model: engines)
-                }
-                if EngineID.allCases.contains(where: { $0.isLLM && engines.isEnabled($0) }) {
-                    LLMPromptRow(prompt: $prefs.llmPrompt)
-                }
+                OnlineEngineGroup(model: engines, prompt: $prefs.llmPrompt)
             }
 
             SettingsSection(title: "结果窗口",
@@ -87,6 +82,12 @@ final class EngineSettingsModel: ObservableObject {
     @Published private var values: [String: String] = [:]
     @Published private(set) var testResults: [EngineID: (ok: Bool, text: String)] = [:]
     @Published private(set) var testing: Set<EngineID> = []
+    /// 「在线翻译」里当前显示的服务商：先显示已启用的第一个，没有就显示腾讯翻译君
+    @Published var selected: EngineID = {
+        let enabled = Set(Preferences.shared.enabledEngines)
+        return [EngineID.tencent, .volcengine, .baidu, .youdao, .deepl, .azure, .openAI, .claude]
+            .first { enabled.contains($0.rawValue) } ?? .tencent
+    }()
 
     /// 默认引擎可选的：Apple 翻译 + 已启用并填了 Key 的引擎
     var selectable: [EngineID] {
@@ -133,76 +134,103 @@ final class EngineSettingsModel: ObservableObject {
     }
 }
 
-/// 一个在线引擎：开关；启用后显示 Key 输入框、测试按钮、申请 Key 的链接
-private struct EngineRow: View {
-    let engine: EngineID
+/// 需要 Key 的在线引擎合成一项：右边选服务商，下面是这个服务商的开关、Key、测试和申请链接；可以逐个启用多个
+private struct OnlineEngineGroup: View {
     @ObservedObject var model: EngineSettingsModel
+    @Binding var prompt: String
 
-    private var tint: Color {
-        switch engine {
-        case .youdao: .coral
-        case .deepl: .chipSky
-        case .azure: .chipLavender
-        case .baidu: .chipHoney
-        case .tencent: .chipSage
-        case .openAI: .chipCocoa
-        case .claude: .apricot
-        default: .chipCocoa
-        }
+    /// 翻译服务（免费额度多的在前）和大模型
+    static let services: [EngineID] = [.tencent, .volcengine, .baidu, .youdao, .deepl, .azure]
+    static let models: [EngineID] = [.openAI, .claude]
+
+    private func label(_ engine: EngineID) -> String {
+        model.isEnabled(engine) ? "\(engine.displayName)  ✓" : engine.displayName
     }
 
     var body: some View {
+        let enabledNames = (Self.services + Self.models).filter(model.isEnabled).map(\.displayName)
+        SettingsRow(icon: "key.fill", tint: .chipSage, title: "在线翻译",
+                    caption: enabledNames.isEmpty ? "需要自己的 Key · 还没有启用"
+                                                  : "已启用：" + enabledNames.joined(separator: "、")) {
+            Picker("", selection: $model.selected) {
+                Section("翻译服务") {
+                    ForEach(Self.services) { Text(label($0)).tag($0) }
+                }
+                Section("大模型") {
+                    ForEach(Self.models) { Text(label($0)).tag($0) }
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+        EngineDetail(engine: model.selected, model: model)
+        if model.selected.isLLM {
+            LLMPromptRow(prompt: $prompt)
+        }
+    }
+}
+
+/// 选中的服务商：启用开关、Key 输入框、测试按钮、申请 Key 的链接
+private struct EngineDetail: View {
+    let engine: EngineID
+    @ObservedObject var model: EngineSettingsModel
+
+    var body: some View {
         let enabled = model.isEnabled(engine)
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsRow(icon: engine.isLLM ? "sparkles" : "globe.asia.australia.fill", tint: tint, title: engine.displayName,
-                        caption: enabled ? (engine.hasCredentials ? "已启用" : "已启用 · 还没有填写 Key") : "未启用") {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("启用")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.warmSecondary)
+                    .frame(width: 110, alignment: .trailing)
                 Toggle("", isOn: Binding(get: { enabled }, set: { model.setEnabled(engine, $0) }))
                     .toggleStyle(WarmSwitchStyle())
                     .labelsHidden()
+                Text(enabled ? (engine.hasCredentials ? "已启用「\(engine.displayName)」" : "已启用 · 还没有填写 Key")
+                             : "未启用，不会联网")
+                    .settingsCaption()
+                Spacer()
             }
-            if enabled {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(engine.fields, id: \.key) { field in
-                        HStack(spacing: 8) {
-                            Text(field.label)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.warmSecondary)
-                                .frame(width: 110, alignment: .trailing)
-                            Group {
-                                if field.secret {
-                                    SecureField(field.placeholder, text: model.binding(engine, field.key))
-                                } else {
-                                    TextField(field.placeholder, text: model.binding(engine, field.key))
-                                }
-                            }
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12))
+            ForEach(engine.fields, id: \.key) { field in
+                HStack(spacing: 8) {
+                    Text(field.label)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.warmSecondary)
+                        .frame(width: 110, alignment: .trailing)
+                    Group {
+                        if field.secret {
+                            SecureField(field.placeholder, text: model.binding(engine, field.key))
+                        } else {
+                            TextField(field.placeholder, text: model.binding(engine, field.key))
                         }
                     }
-                    HStack(spacing: 8) {
-                        Spacer().frame(width: 110)
-                        Button(model.testing.contains(engine) ? "测试中…" : "测试") { model.test(engine) }
-                            .buttonStyle(WarmButtonStyle(prominent: true))
-                            .disabled(model.testing.contains(engine) || !engine.hasCredentials)
-                        if let url = engine.consoleURL {
-                            Link("申请 Key", destination: url)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.apricot)
-                        }
-                        Spacer()
-                    }
-                    if let result = model.testResults[engine] {
-                        Label(result.text, systemImage: result.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .font(.system(size: 11.5, design: .rounded))
-                            .foregroundStyle(result.ok ? Color.chipSage : Color.coral)
-                            .padding(.leading, 118)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
                 }
-                .padding(.horizontal, 13)
-                .padding(.bottom, 12)
+            }
+            HStack(spacing: 8) {
+                Spacer().frame(width: 110)
+                Button(model.testing.contains(engine) ? "测试中…" : "测试") { model.test(engine) }
+                    .buttonStyle(WarmButtonStyle(prominent: true))
+                    .disabled(model.testing.contains(engine) || !engine.hasCredentials)
+                if let url = engine.consoleURL {
+                    Link("申请 Key", destination: url)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.apricot)
+                }
+                Spacer()
+            }
+            if let result = model.testResults[engine] {
+                Label(result.text, systemImage: result.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5, design: .rounded))
+                    .foregroundStyle(result.ok ? Color.chipSage : Color.coral)
+                    .padding(.leading, 118)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(.horizontal, 13)
+        .padding(.bottom, 12)
+        .id(engine)
     }
 }
 
@@ -212,7 +240,7 @@ private struct LLMPromptRow: View {
 
     var body: some View {
         SettingsRow(icon: "text.quote", tint: .chipLavender, title: "大模型提示词",
-                    caption: "只对大模型引擎生效。{source} 和 {target} 会换成原文语言和目标语言。") {
+                    caption: "只对大模型生效。{source} 和 {target} 会换成原文语言和目标语言。") {
             if !prompt.isEmpty {
                 Button("恢复默认") { prompt = "" }
                     .buttonStyle(WarmButtonStyle())

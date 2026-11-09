@@ -89,7 +89,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         window.isReleasedWhenClosed = false
         window.delegate = self
-        select(tab)
+        // 第一次显示不要动画：否则窗口的第一次布局落在动画里，左上角的「Snap 设置」等会从角落飞进来
+        window.title = tab.title
         window.centerOnScreen()
     }
 
@@ -172,10 +173,6 @@ private struct SettingsSidebar: View {
     private let rowHeight: CGFloat = 38
     private let tabs = SettingsTab.allCases
 
-    private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // 让出左上角的红绿灯
@@ -212,12 +209,6 @@ private struct SettingsSidebar: View {
             .padding(.horizontal, 10)
 
             Spacer()
-            Text("Snap \(version)\n默认不联网 · 不收集任何数据")
-                .font(.system(size: 10.5, design: .rounded))
-                .foregroundStyle(Color.warmSecondary)
-                .lineSpacing(2)
-                .padding(.leading, 20)
-                .padding(.bottom, 16)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color.warmCard.opacity(0.45))

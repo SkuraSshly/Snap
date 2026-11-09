@@ -45,3 +45,36 @@ enum SnapIcons {
         }
     }
 }
+
+/// 菜单栏图标：和 App 图标同一个前倾的「V」（Velos 在希腊语里是「箭」）——左刃细且淡、右刃粗。
+/// （18pt 里放不下扫描线，加上会像一个划掉的 V，所以菜单栏只留两片刃）
+/// 模板图：颜色跟着菜单栏走（浅色 / 深色自动适配）。形状和 scripts/make-icon.swift 里的是同一组坐标。
+enum VelosMark {
+    static let menuBar: NSImage = {
+        let image = NSImage(size: CGSize(width: 18, height: 18), flipped: false) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            // App 图标里 V 的范围约是 1024 坐标的 (250…800, 230…830)，放进 18pt
+            context.translateBy(x: 9, y: 9)
+            context.scaleBy(x: 0.0265, y: 0.0265)
+            context.translateBy(x: -530, y: -525)
+            let rotate = CGAffineTransform(translationX: 512, y: 512).rotated(by: -0.10).translatedBy(x: -512, y: -512)
+            let tip = CGPoint(x: 486, y: 246)
+            func blade(_ points: [CGPoint]) {
+                let path = CGMutablePath()
+                path.addLines(between: points, transform: rotate)
+                path.closeSubpath()
+                context.addPath(path)
+                context.fillPath()
+            }
+            // 菜单栏里刃加宽一些，小尺寸也看得清；左刃淡一点，和右刃区分开
+            context.setFillColor(NSColor.black.withAlphaComponent(0.7).cgColor)
+            blade([CGPoint(x: 252, y: 760), CGPoint(x: 372, y: 760), CGPoint(x: tip.x + 50, y: tip.y + 14), tip])
+            context.setFillColor(NSColor.black.cgColor)
+            blade([CGPoint(x: 660, y: 806), CGPoint(x: 812, y: 806), CGPoint(x: tip.x + 66, y: tip.y + 4), tip])
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Snap"
+        return image
+    }()
+}

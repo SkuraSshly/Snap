@@ -45,9 +45,40 @@ final class LongCaptureSession {
     private var flippedOnce = false
     /// 自动滚动的这次手势（开始 → 进行中… → 结束）
     private var autoGesture: ScrollGesture?
+    /// 鼠标移出了选区，自动滚动暂停中
+    private var autoPaused = false
+    /// 自动滚动「滚一步、等画面稳定、再滚下一步」：上一步是什么时候发的（nil = 还没发）
+    private var autoStepAt: ContinuousClock.Instant?
+    /// 最近一次画面有变化（接上新内容 / 位置变了）的时间
+    private var lastFrameChange = ContinuousClock.now
+    /// 这一步之后接上了新内容
+    private var stepAppended = false
+    /// 最近一帧没对上（滚动中截到页面还没画完的一帧时常有，画面稳定后通常就能接上）
+    private var lastFrameLost = false
+    /// 连续几步都没接上新内容
+    private var idleSteps = 0
+    /// 判断一步结束前，等拼接把已截到的帧处理完
+    private enum FlushState { case idle, waiting, done }
+    private var flushState = FlushState.idle
+    /// 等拼接处理完时读到的长度
+    private var flushedLength = 0
+    /// 这一步之后接上了多少像素
+    private var stepAppendedPixels = 0
+    /// 这一步开始时拼好的长度（像素）
+    private var lengthAtStepStart = 0
+    /// 每一步想让页面移动多少点、实际发出的滚动量（点）、实际移动 ÷ 发出（按测到的校准）
+    private var autoStepTarget: CGFloat = 0
+    private var autoStepRequested: CGFloat = 0
+    private var autoStepRatio: CGFloat = 1
+    /// 自动滚动为什么停下（自测用）
+    enum AutoStopReason { case end, lost }
+    private(set) var autoStopReason: AutoStopReason?
 
     init(region: CGRect, screen: NSScreen) {
-        self.region = region
+        // 对齐到整点：Retina 屏上选区常落在半点上（例如 y = 353.5），ScreenCaptureKit 会把它扩成整点再缩放，
+        // 截到的画面被重新采样，滚动前后的像素对不齐，拼接就会接不上
+        self.region = CGRect(x: region.minX.rounded(), y: region.minY.rounded(),
+                             width: region.width.rounded(), height: region.height.rounded())
         self.screen = screen
         scale = screen.backingScaleFactor
         engine = LongCaptureEngine(axis: .vertical)
@@ -58,8 +89,10 @@ final class LongCaptureSession {
         bar.onAxis = { [weak self] axis in self?.setAxis(axis) }
         bar.onAutoScroll = { [weak self] in self?.toggleAutoScroll() }
         bar.onCancel = { [weak self] in self?.cancel() }
-        bar.onSave = { [weak self] in self?.complete(save: true) }
-        bar.onDone = { [weak self] in self?.complete(save: false) }
+        bar.onSave = { [weak self] in self?.complete(.save) }
+        bar.onDone = { [weak self] in self?.complete(.done) }
+        bar.onEdit = { [weak self] in self?.complete(.edit) }
+        bar.onPin = { [weak self] in self?.complete(.pin) }
         installScrollWatchers()
         escapeKey = HotkeyManager.shared.addTemporary(keyCode: kVK_Escape) { [weak self] in self?.cancel() }
         overlay.message = hint
@@ -86,16 +119,9 @@ final class LongCaptureSession {
         }
     }
 
-    /// 开始时的提示：有限速时可以随便滚，没有时请慢一点（并说明怎样开启限速）
+    /// 开始时唯一的一条提示（之后滚动、自动滚动的过程中都不再出提示，界面保持干净）
     private var hint: String {
-        let direction = axis == .vertical ? "向下" : "向右"
-        if scrollTap != nil {
-            return "\(direction)滚动页面即可，滚快了 Snap 会自动放慢，不会漏掉内容；也可以点「自动滚动」"
-        }
-        if !Preferences.shared.longCaptureThrottle {
-            return "请缓慢\(direction)滚动页面，或点「自动滚动」"   // 设置里关了滚动限速
-        }
-        return "请缓慢\(direction)滚动页面，或点「自动滚动」\n在 系统设置 › 隐私与安全性 › 辅助功能 里允许 Snap 后，滚多快都不会漏"
+        "请缓慢\(axis == .vertical ? "向下" : "向右")滚动页面，或点「自动滚动」开始截长图"
     }
 
     /// 监听滚轮（给拼接提示滚动量），有权限时再装上限速
@@ -116,7 +142,6 @@ final class LongCaptureSession {
                     timer.invalidate()
                     self.permissionTimer = nil
                     self.installThrottle()
-                    if self.overlay.message != nil, !self.hasScrolled { self.overlay.message = self.hint }
                 }
             }
         }
@@ -157,20 +182,29 @@ final class LongCaptureSession {
         length = update.length
         if let parts = update.preview { preview.show(parts, axis: axis) }
         bar.setLength(update.length, axis: axis, scale: scale)
+        if update.event != .lost { lastFrameLost = false }
         switch update.event {
-        case .appended:
+        case .appended(let pixels):
+            stepAppendedPixels += pixels
             lastProgress = .now
+            lastFrameChange = .now
             autoAppended = true
+            stepAppended = true
             if !hasScrolled { hasScrolled = true }
             overlay.message = nil
         case .moved:
             lastProgress = .now
+            lastFrameChange = .now
         case .lost:
-            stopAutoScroll()
-            overlay.message = "滚动太快，没能接上。请往回滚一点"
+            // 自动滚动时一帧没对上不算失败：等这一步滚完、画面稳定后再判断（见 autoTick）
+            if autoTimer != nil {
+                lastFrameLost = true
+                lastFrameChange = .now
+                return
+            }
+            break   // 过程中不出提示：往回滚一点就能接上
         case .limitReached:
             stopAutoScroll()
-            overlay.message = "已达到最大长度，点「完成」保存"
         case .started, .unchanged:
             break
         }
@@ -189,7 +223,7 @@ final class LongCaptureSession {
         bar.setLength(0, axis: newAxis, scale: scale)
         preview.show([], axis: newAxis)
         if scrollTap != nil { installThrottle() }   // 限速按新方向重新装
-        overlay.message = hint
+        overlay.message = nil
         placeChrome()
     }
 
@@ -209,66 +243,134 @@ final class LongCaptureSession {
         }
         // 刚给了权限：顺便装上限速
         if scrollTap == nil { installThrottle() }
-        // 滚动事件交给鼠标指针下面的窗口：先把指针移到选区中间
-        CGWarpMouseCursorPosition(cgCenter)
-        CGAssociateMouseAndMouseCursorPosition(1)
-        autoGesture = ScrollGesture(axis: axis)
+        // 不移动用户的鼠标：macOS 只把滚动事件交给指针下面的窗口（实测过：能让页面滚动的发法都会把指针拉过去，
+        // 不拉指针的发法页面都不动），所以指针在选区里时才滚，移出去就暂停，移回来接着滚
         Log.capture.notice("长截图：开始自动滚动")
         autoStarted = .now
         lastProgress = .now
         autoAppended = false
-        overlay.message = nil
+        autoPaused = false
+        autoStepAt = nil
+        idleSteps = 0
+        autoStepRatio = 1
+        autoStopReason = nil
+        lastFrameLost = false
         bar.isAutoScrolling = true
-        autoTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        overlay.message = nil
+        autoTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.autoTick() }
         }
     }
 
+
     private func autoTick() {
         let now = ContinuousClock.now
-        // 开始一秒还没往前接上任何内容：可能方向反了，换一次方向
-        if !autoAppended, !flippedOnce, now - autoStarted > .seconds(1) {
-            flippedOnce = true
-            autoSign = -autoSign
+        // 鼠标不在选区里：暂停（结束这次手势），计时也不算，等鼠标回来
+        // 选区很大时控制条会摆在选区里面：指针停在控制条上也要暂停，不然滚动事件会发给控制条自己
+        let onBar = bar.isVisible && bar.frame.contains(NSEvent.mouseLocation)
+        guard let location = currentMouseLocation, cgRegion.contains(location), !onBar else {
+            // 和 QQ 一样：鼠标在页面上才滚，移开就停，不出提示
+            if !autoPaused {
+                autoPaused = true
+                autoGesture?.end(at: currentMouseLocation ?? .zero)
+                autoGesture = nil
+            }
             autoStarted = now
             lastProgress = now
-        }
-        // 1.5 秒没有任何滚动：到底了
-        if now - lastProgress > .milliseconds(1500) {
-            stopAutoScroll()
-            overlay.message = axis == .vertical ? "已经滚到底了，点「完成」保存" : "已经滚到最右边了，点「完成」保存"
+            autoStepAt = nil
             return
+        }
+        autoPaused = false
+        // 滚一步、等画面稳定、再滚下一步（和 BetterShot 等工具一样）：
+        // 滚动途中截到的帧可能是页面还没画完的样子，对不上；等画面停下来再拼，就稳稳接得上
+        if let stepAt = autoStepAt {
+            let elapsed = now - stepAt
+            let settled = elapsed >= .milliseconds(90) && now - lastFrameChange >= .milliseconds(90) && !lastFrameLost
+            if lastFrameLost, elapsed > .milliseconds(1200) {
+                // 画面停下来了还是对不上：页面变化太大（例如内容在动、或一下跳得太远）
+                autoStopReason = .lost
+                stopAutoScroll()
+                return
+            }
+            guard settled || (!lastFrameLost && elapsed >= .milliseconds(700)) else { return }
+            // 画面看起来停了：先等已经截到的帧全部拼完（拼接慢时结果会晚到），确认这期间没有新变化再算这一步结束
+            if flushState == .idle {
+                flushState = .waiting
+                let requested = now
+                Task { [weak self] in
+                    guard let flushed = await self?.engine.flush(), let self else { return }
+                    self.flushedLength = flushed
+                    // 刷完时这期间没有新变化：这一步确实结束了
+                    self.flushState = self.lastFrameChange <= requested ? .done : .idle
+                }
+                return
+            }
+            guard flushState == .done else { return }
+            flushState = .idle
+            // 这一步真正往前接上了多少（点）：只接上几个像素是页面到底后回弹，不算前进
+            // 用画面稳定后的长度算（滚过头拉出的空白在弹回后不算长度）
+            let movedPoints = CGFloat(flushedLength - lengthAtStepStart) / scale
+            let progressed = movedPoints >= max(4, autoStepTarget * 0.25)
+            // 按实际移动距离校准下一步（各 App 对同样的滚动量移动得不一样多）
+            if progressed, autoStepRequested > 0, idleSteps == 0, movedPoints < autoStepTarget * 3 {
+                let measured = min(max(movedPoints / autoStepRequested, 0.25), 4)
+                autoStepRatio = autoStepRatio * 0.5 + measured * 0.5
+            }
+            idleSteps = progressed ? 0 : idleSteps + 1
+            if !autoAppended {
+                // 刚开始还没接上过新内容：先往下试两步（第一下偶尔会被系统吞掉），再反方向试两步，都不动才算到头
+                if idleSteps == 2, !flippedOnce {
+                    flippedOnce = true
+                    autoSign = -autoSign
+                    idleSteps = 0
+                } else if idleSteps >= 2 {
+                    autoStopReason = .end
+                    stopAutoScroll()
+                    return
+                }
+            } else if idleSteps >= 2 {
+                // 连着两步都没有新内容：到底了
+                autoStopReason = .end
+                stopAutoScroll()
+                return
+            }
         }
         let extent = axis == .vertical ? region.height : region.width
-        // 每秒约 3 个选区高度（每 0.05 秒滚 15%），相邻两帧重叠很多，又不至于慢得等不及
-        let amount = Int32(max(12, min(320, extent * 0.15 * Preferences.shared.longCaptureAutoSpeed.factor))) * autoSign
-        // 鼠标移出了选区：滚动事件会发到别的窗口去，停下
-        guard region.contains(NSEvent.mouseLocation) else {
-            stopAutoScroll()
-            overlay.message = "鼠标移出了选区，自动滚动已停止。把鼠标放回选区里，再点「自动滚动」"
-            return
-        }
-        autoGesture?.scroll(amount, at: cgCenter)
+        // 每步约选区的 30%（慢 18%、快 48%）：相邻两次稳定的画面重叠一大半，比对稳
+        autoStepTarget = min(extent * 0.5, extent * 0.3 * Preferences.shared.longCaptureAutoSpeed.factor)
+        autoStepRequested = max(12, (autoStepTarget / autoStepRatio).rounded())
+        let amount = Int32(autoStepRequested) * autoSign
+        // 每一步是一次完整的手势（开始 → 结束）：到底时的回弹马上弹回去，下一步从稳定的画面开始
+        let gesture = ScrollGesture(axis: axis)
+        stepAppended = false
+        stepAppendedPixels = 0
+        flushState = .idle
+        lengthAtStepStart = flushedLength > 0 ? flushedLength : length
+        autoStepAt = now
+        // 就发在指针现在的位置：指针不会被移动
+        gesture.scroll(amount, at: location)
+        gesture.end(at: location)
     }
 
     private func stopAutoScroll() {
         if autoTimer != nil { Log.capture.notice("长截图：停止自动滚动") }
         autoTimer?.invalidate()
         autoTimer = nil
-        autoGesture?.end(at: cgCenter)
+        if let location = currentMouseLocation { autoGesture?.end(at: location) }
         autoGesture = nil
+        autoPaused = false
         bar.isAutoScrolling = false
     }
 
-    /// 选区中心（Quartz 全局坐标：原点在主屏左上角）
-    private var cgCenter: CGPoint {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
-        return CGPoint(x: region.midX, y: primaryHeight - region.midY)
-    }
+    /// 鼠标指针现在的位置（Quartz 全局坐标：原点在主屏左上角）
+    private var currentMouseLocation: CGPoint? { CGEvent(source: nil)?.location }
 
     // MARK: - 结束
 
-    private func complete(save: Bool) {
+    /// 结束方式：完成（复制、缩略图）、保存到文件、打开编辑窗口继续标注、钉在屏幕上
+    enum Finish { case done, save, edit, pin }
+
+    private func complete(_ finish: Finish) {
         guard !isFinished else { return }
         stopAutoScroll()
         isFinished = true
@@ -280,8 +382,21 @@ final class LongCaptureSession {
             guard let image else { return }
             Log.capture.notice("长截图完成：\(image.width)×\(image.height) 像素")
             let size = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
-            ScreenshotOutput.deliver(image, scale: scale, sourceRect: CGRect(origin: CGPoint(x: region.minX, y: region.maxY - size.height), size: size),
-                                     forceSave: save)
+            // 位置用截取时选区在屏幕上的位置（只取开头那一屏的高度）：
+            // 缩略图、编辑窗口、钉图按它找所在的屏幕。按整张长图算的话中心点会落到屏幕下面很远，
+            // 多屏时可能落进另一块屏幕，缩略图就跑到别的屏幕上去了
+            let shownHeight = min(size.height, region.height), shownWidth = min(size.width, region.width)
+            let sourceRect = CGRect(x: region.minX, y: region.maxY - shownHeight, width: shownWidth, height: shownHeight)
+            switch finish {
+            case .edit:
+                // 直接打开编辑窗口（按原像素宽度显示、可滚动、可标注），完成后再复制 / 保存
+                AnnotationEditorWindowController.open(CapturedImage(image: image, scale: scale, sourceRect: sourceRect))
+            case .pin:
+                // 钉在屏幕上：长图在钉图窗口里滚动查看，⌥ + 滚轮缩放
+                _ = PinManager.shared.pin(CapturedImage(image: image, scale: scale, sourceRect: sourceRect))
+            case .done, .save:
+                ScreenshotOutput.deliver(image, scale: scale, sourceRect: sourceRect, forceSave: finish == .save)
+            }
         }
     }
 
@@ -354,6 +469,8 @@ final class LongCaptureSession {
     func debugStartWithoutCapture() {
         bar.onAxis = { [weak self] axis in self?.setAxis(axis) }
         bar.onCancel = { [weak self] in self?.cancel() }
+        bar.onEdit = { [weak self] in self?.complete(.edit) }
+        bar.onPin = { [weak self] in self?.complete(.pin) }
         overlay.message = hint
         overlay.orderFrontRegardless()
         placeChrome()
@@ -373,6 +490,8 @@ final class LongCaptureSession {
     var debugOverlay: LongCaptureOverlay { overlay }
     var debugPreview: LongCapturePreview { preview }
     var debugLength: Int { length }
+    var debugIsAutoScrolling: Bool { autoTimer != nil }
+    func debugToggleAutoScroll() { toggleAutoScroll() }
     #endif
 }
 
@@ -451,6 +570,8 @@ final class LongCaptureBar: NSPanel {
     var onCancel: (() -> Void)?
     var onSave: (() -> Void)?
     var onDone: (() -> Void)?
+    var onEdit: (() -> Void)?
+    var onPin: (() -> Void)?
 
     var isAutoScrolling = false {
         didSet {
@@ -466,6 +587,8 @@ final class LongCaptureBar: NSPanel {
                                         help: "自动滚动页面（需要「辅助功能」权限）")
     private let lengthLabel = NSTextField(labelWithString: "")
     private let cancelButton = ToolbarButton(symbol: "xmark", help: "取消长截图（Esc）")
+    private let editButton = ToolbarButton(symbol: "square.and.pencil", help: "编辑：结束长截图，打开编辑窗口继续标注")
+    private let pinButton = ToolbarButton(symbol: "pin", help: "钉在屏幕上：结束长截图，把整张长图钉在屏幕上")
     private let saveButton = ToolbarButton(symbol: "square.and.arrow.down", help: "完成并保存到文件")
     private let doneButton = PillButton(title: "完成", symbol: "checkmark", color: WarmPalette.apricot,
                                         help: "完成：复制到剪贴板、显示缩略图")
@@ -491,9 +614,11 @@ final class LongCaptureBar: NSPanel {
         direction.onSelect = { [weak self] index in self?.onAxis?(index == 0 ? .vertical : .horizontal) }
         autoButton.action = { [weak self] in self?.onAutoScroll?() }
         cancelButton.action = { [weak self] in self?.onCancel?() }
+        editButton.action = { [weak self] in self?.onEdit?() }
+        pinButton.action = { [weak self] in self?.onPin?() }
         saveButton.action = { [weak self] in self?.onSave?() }
         doneButton.action = { [weak self] in self?.onDone?() }
-        for view in [direction, autoButton, lengthLabel, cancelButton, saveButton, doneButton] as [NSView] { bar.addSubview(view) }
+        for view in [direction, autoButton, lengthLabel, cancelButton, editButton, pinButton, saveButton, doneButton] as [NSView] { bar.addSubview(view) }
         setLength(0, axis: .vertical, scale: 1)
     }
 
@@ -509,7 +634,7 @@ final class LongCaptureBar: NSPanel {
 
     /// 正在生成结果：按钮不能再点
     func setBusy() {
-        for control in [direction, autoButton, cancelButton, saveButton, doneButton] as [WarmControl] { control.isEnabled = false }
+        for control in [direction, autoButton, cancelButton, editButton, pinButton, saveButton, doneButton] as [WarmControl] { control.isEnabled = false }
         lengthLabel.stringValue = "正在生成…"
         relayout()
     }
@@ -529,6 +654,8 @@ final class LongCaptureBar: NSPanel {
                                    height: labelSize.height)
         x += max(ceil(labelSize.width), 118) + 8
         place(cancelButton, button)
+        place(editButton, button)
+        place(pinButton, button)
         place(saveButton, button)
         place(doneButton, doneButton.fittingWidth)
         let width = x + 2
@@ -549,6 +676,8 @@ final class LongCaptureBar: NSPanel {
     #if DEBUG
     func debugTapAutoScroll() { onAutoScroll?() }
     var debugAutoTitle: String { autoButton.title }
+    func debugTapEdit() { onEdit?() }
+    func debugTapPin() { onPin?() }
     var debugLengthText: String { lengthLabel.stringValue }
     #endif
 }

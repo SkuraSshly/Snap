@@ -215,6 +215,7 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         if selected.tool.usesColor { shown.color = selected.color }
         shown.size = selected.size
         if selected.allowsOpacity { shown.opacity = selected.opacity }
+        shown.filled = selected.filled
         return shown
     }
 
@@ -235,7 +236,9 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         if selected.tool.usesColor { changed.color = newStyle.color }
         changed.size = newStyle.size
         if selected.allowsOpacity { changed.opacity = newStyle.opacity }
-        guard changed.color != selected.color || changed.size != selected.size || changed.opacity != selected.opacity else { return }
+        if selected.tool.supportsFill { changed.filled = newStyle.filled }
+        guard changed.color != selected.color || changed.size != selected.size || changed.opacity != selected.opacity
+            || changed.filled != selected.filled else { return }
         let now = Date()
         if lastStyleEdit?.id != selected.id || now.timeIntervalSince(lastStyleEdit!.time) > 1 {
             document.recordUndo()
@@ -455,7 +458,8 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
             existing.shape = shape
             return existing
         }
-        return Annotation(shape: shape, color: style.color, size: style.size, opacity: style.opacity)
+        return Annotation(shape: shape, color: style.color, size: style.size, opacity: style.opacity,
+                          filled: tool.supportsFill && style.filled)
     }
 
     // MARK: - 文字输入
@@ -490,10 +494,14 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
 
     private func applyStyleToTextView() {
         guard let textView else { return }
-        let attributes = Annotation.textAttributes(color: style.color, fontSize: style.size)
+        // 有底色时：输入框也显示底色，文字自动用白 / 黑字，看到的就是完成后的样子
+        let foreground = style.filled ? Annotation.textColor(onBackground: style.color) : style.color
+        let attributes = Annotation.textAttributes(color: foreground, fontSize: style.size)
         textView.typingAttributes = attributes
         textView.textStorage?.setAttributes(attributes, range: NSRange(location: 0, length: textView.string.utf16.count))
-        textView.insertionPointColor = style.color
+        textView.insertionPointColor = foreground
+        textView.drawsBackground = style.filled
+        textView.backgroundColor = style.filled ? style.color.withAlphaComponent(style.opacity) : .clear
         fitTextView()
     }
 
@@ -540,7 +548,8 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         textView.removeFromSuperview()
         window?.makeFirstResponder(nil)
         if !string.isEmpty {
-            document.add(Annotation(shape: .text(string, topLeft: textTopLeft), color: style.color, size: style.size, opacity: style.opacity))
+            document.add(Annotation(shape: .text(string, topLeft: textTopLeft), color: style.color, size: style.size, opacity: style.opacity,
+                                    filled: style.filled))
             redraw()
         }
         onChange?()

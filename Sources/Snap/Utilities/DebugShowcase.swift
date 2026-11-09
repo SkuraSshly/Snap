@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import ScreenCaptureKit
+import SnapOCRKit
 
 /// README 用的界面截图（只编进 debug 版本）。
 /// - 背景是 Snap 自己画的演示桌面（渐变壁纸 + 几个示意窗口），不读取真实屏幕
@@ -484,12 +485,52 @@ enum DebugShowcase {
         try? await Task.sleep(for: .milliseconds(400))
         await captureVerified(region.insetBy(dx: -40, dy: -40), on: screen, name: "6-countdown.png", dir: dir)
         countdown.finish(.cancelled)
+
+        // 6b. 截屏翻译的结果窗口：演示用的英文段落 + 准确的中文译文（只影响这张演示图）
+        let english = "Snap keeps everything on your Mac. Text recognition and Apple Translation both run offline, so nothing you capture ever leaves your computer."
+        let chinese = "Snap 的一切都留在你的 Mac 上。文字识别和 Apple 翻译都在本机离线运行，你截取的任何内容都不会离开你的电脑。"
+        TranslationModel.debugTranslator = { _, _, _ in chinese }
+        let translateModel = TranslationModel(result: OCRResult(text: english, language: .english, confidence: 1, lines: []),
+                                              recognitionTime: .milliseconds(180))
+        let translateWindow = TranslationWindow(model: translateModel, near: g(document).insetBy(dx: 60, dy: 80))
+        translateWindow.show()
+        translateModel.translate()
+        try? await Task.sleep(for: .milliseconds(800))
+        // 结果窗口不会被区域截屏截到（截屏翻译的窗口都排除在外），这里单独拍这个窗口
+        await captureWindow(translateWindow.debugWindow, name: "10-translate.png", dir: dir)
+        translateWindow.close()
+        TranslationModel.debugTranslator = nil
+
+        // 6c. 长截图：在演示文档上框一块，把它下面的内容一帧帧喂进去（不截真实屏幕），预览里是拼好的页面
+        // 选区放在文档正文里（左边栏右侧、标题栏下方），不压到旁边的窗口
+        // 从正文顶上开始，往下喂的画面都还在文档里
+        let longHeight: CGFloat = 250
+        let longRegion = CGRect(x: document.minX + 200, y: document.maxY - 60 - longHeight, width: 330,
+                                height: longHeight).offsetBy(dx: o.x, dy: o.y)
+        let longSession = LongCaptureSession(region: longRegion, screen: screen)
+        longSession.debugStartWithoutCapture()
+        let pixelScale = screen.backingScaleFactor
+        let cropX = (longRegion.minX - screen.frame.minX) * pixelScale
+        let cropTop = (screen.frame.maxY - longRegion.maxY) * pixelScale
+        for k in 0..<6 {
+            let rect = CGRect(x: cropX, y: cropTop + CGFloat(k) * 30 * pixelScale, width: longRegion.width * pixelScale,
+                              height: longRegion.height * pixelScale)
+            if let crop = image.cropping(to: rect.integral), let frame = PixelFrame(image: crop) {
+                longSession.debugFeed(frame)
+            }
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        try? await Task.sleep(for: .milliseconds(500))
+        let longArea = longRegion.union(longSession.debugBar.barFrame).union(longSession.debugPreview.frame).insetBy(dx: -30, dy: -30)
+        await captureVerified(longArea, on: screen, name: "11-long-capture.png", dir: dir)
+        longSession.debugCancel()
+        try? await Task.sleep(for: .milliseconds(300))
         frameWindow.close()
         backdrop.close()
 
         // 7. 设置窗口
         for (tab, name) in [(SettingsTab.recording, "7-settings-recording.png"), (.hotkeys, "8-settings-hotkeys.png"),
-                            (.general, "9-settings-general.png")] {
+                            (.general, "9-settings-general.png"), (.translate, "12-settings-translate.png")] {
             SettingsWindowController.show(tab)
             try? await Task.sleep(for: .milliseconds(700))
             if let window = NSApp.windows.first(where: { $0.title == tab.title && $0.isVisible }) {

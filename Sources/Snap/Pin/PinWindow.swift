@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// 钉在屏幕上的截图：置顶的浮动小窗。
 /// - 单击选中（杏色边框），选中后按 Esc 关闭、⌘C 复制；双击直接关闭
 /// - 拖动移动；滚轮 / 触控板双指捏合缩放（以鼠标位置为中心）
+/// - 长截图：窗口只露出一段，滚轮在窗口里翻看；⌥ + 滚轮、双指捏合缩放
 /// - ⌘ + 滚轮调整透明度；右键菜单里也有透明度、原始大小、复制、存储
 /// 窗口是「不激活」的面板：选中它不会把正在用的 App 切到后台。
 final class PinWindow: NSPanel {
@@ -64,16 +65,23 @@ final class PinView: NSView {
     private let indicator = PillLabel(padding: NSSize(width: 10, height: 4))
     private var indicatorTimer: Timer?
 
-    /// 相对原始大小的缩放比例
+    /// 相对原始大小的缩放比例（从窗口第一次的大小算出来：钉图可能被缩小显示）
     private var zoom: CGFloat = 1
+    private var zoomKnown = false
+    /// 长截图：沿哪个方向长（窗口只露出一段，可以滚动）；普通截图为 nil
+    private let longAxis: ScrollAxis?
+    /// 长截图已经滚过的距离（点，从开头算）
+    private var scrollOffset: CGFloat = 0
     private static let zoomRange: ClosedRange<CGFloat> = 0.1...8
     private static let opacityRange: ClosedRange<CGFloat> = 0.2...1
 
     init(capture: CapturedImage, image: CGImage) {
         self.capture = capture
         self.image = image
+        longAxis = Self.longAxis(for: capture.pointSize)
         super.init(frame: CGRect(origin: .zero, size: capture.pointSize))
         wantsLayer = true
+        layer?.masksToBounds = true   // 长截图只显示窗口里的那一段
 
         // 原始大小时，图层的点尺寸 × contentsScale 正好等于图像像素，一个像素对一个像素显示
         imageLayer.contents = image
@@ -111,11 +119,50 @@ final class PinView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// 长宽比超过 2.5 算长截图
+    static func longAxis(for size: CGSize) -> ScrollAxis? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        if size.height / size.width > 2.5 { return .vertical }
+        if size.width / size.height > 2.5 { return .horizontal }
+        return nil
+    }
+
+    /// 缩放后整张图的大小
+    private var imageSize: CGSize {
+        CGSize(width: capture.pointSize.width * zoom, height: capture.pointSize.height * zoom)
+    }
+
+    /// 长截图能滚多远
+    private var maxScroll: CGFloat {
+        switch longAxis {
+        case .vertical: max(0, imageSize.height - bounds.height)
+        case .horizontal: max(0, imageSize.width - bounds.width)
+        case nil: 0
+        }
+    }
+
+    /// 图层位置：普通截图铺满窗口；长截图按滚动的距离露出对应的一段（竖向从上往下、横向从左往右）
+    private var imageFrame: CGRect {
+        let size = longAxis == nil ? bounds.size : imageSize
+        switch longAxis {
+        case .vertical: return CGRect(x: 0, y: bounds.height - size.height + scrollOffset, width: bounds.width, height: size.height)
+        case .horizontal: return CGRect(x: -scrollOffset, y: 0, width: size.width, height: bounds.height)
+        case nil: return bounds
+        }
+    }
+
     override func layout() {
         super.layout()
+        if !zoomKnown, bounds.width > 0 {
+            // 第一次布局：窗口大小 / 原始大小 = 当前比例（钉图可能被缩小显示，之后的缩放从这里算起）
+            zoom = longAxis == .horizontal ? bounds.height / capture.pointSize.height : bounds.width / capture.pointSize.width
+            zoomKnown = true
+            if longAxis != nil { showIndicator("滚轮翻看，⌥ + 滚轮缩放") }
+        }
+        scrollOffset = min(max(scrollOffset, 0), maxScroll)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        imageLayer.frame = bounds
+        imageLayer.frame = imageFrame
         borderLayer.frame = bounds
         CATransaction.commit()
         updateBorder()
@@ -144,6 +191,15 @@ final class PinView: NSView {
             let alpha = (window.alphaValue + delta * 0.005).clamped(to: Self.opacityRange)
             window.alphaValue = alpha
             showIndicator("透明度 \(Int((alpha * 100).rounded()))%")
+        } else if let longAxis, !event.modifierFlags.contains(.option) {
+            // 长截图：滚轮在窗口里翻看（按住 ⌥ 才是缩放）
+            let raw = longAxis == .vertical ? event.scrollingDeltaY : (event.scrollingDeltaX != 0 ? event.scrollingDeltaX : event.scrollingDeltaY)
+            let step = event.hasPreciseScrollingDeltas ? raw : raw * 12
+            scrollOffset = min(max(scrollOffset - step, 0), maxScroll)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            imageLayer.frame = imageFrame
+            CATransaction.commit()
         } else {
             setZoom(zoom * exp(delta * 0.01), anchor: convert(event.locationInWindow, from: nil))
         }
@@ -158,8 +214,16 @@ final class PinView: NSView {
         guard let window else { return }
         let clamped = newZoom.clamped(to: Self.zoomRange)
         let base = capture.pointSize
-        let newSize = CGSize(width: (base.width * clamped).rounded(), height: (base.height * clamped).rounded())
+        var newSize = CGSize(width: (base.width * clamped).rounded(), height: (base.height * clamped).rounded())
         guard newSize.width >= 20, newSize.height >= 20 else { return }
+        // 长截图：窗口最多占屏幕的 85%，多出来的在窗口里滚动；滚动的位置按比例跟着缩放
+        if let longAxis, let visible = window.screen?.visibleFrame {
+            switch longAxis {
+            case .vertical: newSize.height = min(newSize.height, (visible.height * 0.85).rounded())
+            case .horizontal: newSize.width = min(newSize.width, (visible.width * 0.85).rounded())
+            }
+            scrollOffset *= clamped / zoom
+        }
         zoom = clamped
 
         let old = window.frame
@@ -236,6 +300,12 @@ final class PinView: NSView {
     @objc private func closePin() {
         window?.close()
     }
+
+    #if DEBUG
+    var debugScrollOffset: CGFloat { scrollOffset }
+    var debugZoom: CGFloat { zoom }
+    var debugIsLong: Bool { longAxis != nil }
+    #endif
 
     // MARK: - 提示（缩放比例 / 透明度）
 

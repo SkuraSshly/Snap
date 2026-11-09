@@ -65,6 +65,7 @@ final class ScreenshotSession: OverlayEventHandler {
         toolbar.onSelectColor = { [weak self] color in self?.updateStyle { $0.color = color } }
         toolbar.onSelectSize = { [weak self] size in self?.updateStyle { $0.size = size } }
         toolbar.onSelectOpacity = { [weak self] opacity in self?.updateStyle { $0.opacity = opacity } }
+        toolbar.onToggleFill = { [weak self] in self?.updateStyle { $0.filled.toggle() } }
         toolbar.onPickColor = { [weak self] color, opacity in
             self?.updateStyle {
                 $0.color = color

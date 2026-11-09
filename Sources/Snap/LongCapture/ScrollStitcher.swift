@@ -80,7 +80,7 @@ struct ScrollStitcher {
     let edgeMargin: (leading: Int, trailing: Int)
 
     /// 拼好的长度（像素，沿滚动方向，含末尾固定部分）
-    var length: Int { isMoving ? committedEnd + footerLength : (first.map { lineCount($0) } ?? 0) }
+    var length: Int { isMoving ? contentEnd + footerLength : (first.map { lineCount($0) } ?? 0) }
     /// 已经开始拼接（至少滚动过一次）
     var isMoving: Bool { first == nil && last != nil }
     private(set) var reachedLimit = false
@@ -169,7 +169,14 @@ struct ScrollStitcher {
             let previousProfiles = lastProfiles ?? Self.profiles(of: previous, axis: axis, span: span(for: previous))
             lastProfiles = previousProfiles
             profiles = Self.profiles(of: frame, axis: axis, span: span(for: frame))
-            shift = Self.tolerantShift(previous: (lastLines, previousProfiles), current: (lines, profiles!), hint: hint)
+            // 先在滚轮提示附近找；提示不准（平滑滚动工具放大了滚动、App 滚动的距离和滚轮量不同）或没有提示时，在所有距离里找
+            let usefulHint = hint.flatMap { $0 == 0 ? nil : $0 }
+            shift = Self.tolerantShift(previous: (lastLines, previousProfiles), current: (lines, profiles!), hint: usefulHint,
+                                       frames: (previous, frame), axis: axis, span: span(for: frame))
+            if shift == nil, usefulHint != nil {
+                shift = Self.tolerantShift(previous: (lastLines, previousProfiles), current: (lines, profiles!), hint: nil,
+                                           frames: (previous, frame), axis: axis, span: span(for: frame))
+            }
         }
         guard let shift else {
             // 对不上：保留上一帧，等用户滚回能对上的位置
@@ -247,12 +254,39 @@ struct ScrollStitcher {
     func makeImage() -> CGImage? {
         guard let last else { return nil }
         if let first { return Self.image(of: first) }
+        let end = contentEnd
         var all = content
         if footerLength > 0 {
             let n = lineCount(last)
-            Self.copy(last, axis: axis, lines: (n - footerLength)..<n, into: &all, at: committedEnd)
+            Self.copy(last, axis: axis, lines: (n - footerLength)..<n, into: &all, at: end)
         }
-        return Self.image(lines: all, count: committedEnd + footerLength, cross: cross, axis: axis, colorSpace: last.colorSpace)
+        return Self.image(lines: all, count: end + footerLength, cross: cross, axis: axis, colorSpace: last.colorSpace)
+    }
+
+    /// 拼好的内容实际到哪里为止：去掉滚过头时拉出来的空白。
+    /// 触控板式滚动到页面尽头会「回弹」：先多拉出一截空白背景，松开后弹回去。拉出来的那截已经被接上了，
+    /// 页面弹回后，当前画面的末尾之后如果全是纯色（背景），就是那截空白，不算内容
+    private var contentEnd: Int {
+        guard first == nil, let last else { return committedEnd }
+        let end = position + lineCount(last) - footerLength
+        guard end > 0, end < committedEnd else { return committedEnd }
+        let lineBytes = cross * 4
+        let span = band ?? 0..<cross
+        let blank = content.withUnsafeBytes { raw -> Bool in
+            guard let base = raw.baseAddress else { return false }
+            let reference = base.loadUnaligned(fromByteOffset: end * lineBytes + span.lowerBound * 4, as: UInt32.self)
+            for line in end..<committedEnd {
+                for x in stride(from: span.lowerBound, to: span.upperBound, by: 3) {
+                    let p = base.loadUnaligned(fromByteOffset: line * lineBytes + x * 4, as: UInt32.self)
+                    for shift in stride(from: 0, to: 24, by: 8) {
+                        let a = Int((p >> UInt32(shift)) & 0xff), b = Int((reference >> UInt32(shift)) & 0xff)
+                        if abs(a - b) > 6 { return false }
+                    }
+                }
+            }
+            return true
+        }
+        return blank ? end : committedEnd
     }
 
     /// 预览用：拼好的内容最后 maxLines 行（不含末尾固定部分），一张图
@@ -376,11 +410,15 @@ struct ScrollStitcher {
         return mostlySame(previous, current) ? 0 : nil
     }
 
-    /// 容差比对：像素不完全一致时，找亮度轮廓最接近的滚动距离。
-    /// 有滚轮提示时只在提示附近找（快、也不容易被重复的花纹骗），否则在所有可能的距离里找。
-    /// 最好的位置要足够像（每段平均相差不超过 4 级亮度），而且明显比其他位置像，否则返回 nil
+    /// 容差比对：像素不完全一致时（例如 Retina 屏上截取时的颜色转换让三分之一的像素差 1~2 级），找最像的滚动距离。
+    /// 1. 先按像素（隔几个取一个，允许细微差别）找出两帧里原位置没变的行：固定的标题栏、输入框，不参与比对。
+    ///    不能用亮度轮廓判断——行距整齐的文字，不同的两行轮廓也差不多，会被误当成没变
+    /// 2. 用亮度轮廓快速给每个可能的距离打分，取最好的几个
+    /// 3. 对这几个逐个按像素核对，取最像的：要足够像，而且明显比其他候选像，否则返回 nil
+    /// 有滚轮提示时只在提示附近找（快、也不容易被重复的花纹骗）
     private static func tolerantShift(previous: (lines: [Line], profiles: [Profile]), current: (lines: [Line], profiles: [Profile]),
-                                      hint: Int?) -> Int? {
+                                      hint: Int?, frames: (previous: PixelFrame, current: PixelFrame), axis: ScrollAxis,
+                                      span: Range<Int>) -> Int? {
         let n = current.lines.count
         guard n == previous.lines.count, n == current.profiles.count, n == previous.profiles.count else { return nil }
         let minOverlap = max(8, n / 8)
@@ -392,52 +430,94 @@ struct ScrollStitcher {
             let low = max(-limit, hint - window), high = min(limit, hint + window)
             if low <= high { candidates = low...high }
         }
-        let cur = current.profiles, prev = previous.profiles
-        func distance(_ a: Profile, _ b: Profile) -> Float {
-            let d = a - b
-            return d.replacing(with: -d, where: d .< 0).sum() / 16
-        }
-        // 没滚动、只有细微差别（每行和原位置几乎一样）：当作没滚动
         let usable = (0..<n).filter { !current.lines[$0].flat }
         guard !usable.isEmpty else { return 0 }
-        let still = usable.reduce(Float(0)) { $0 + distance(cur[$1], prev[$1]) } / Float(usable.count)
-        if still <= 1.5 { return 0 }
-        // 两帧里原位置几乎没变的行：固定的标题栏、输入框，不参与比对
-        let fixed = (0..<n).map { distance(cur[$0], prev[$0]) <= 1.5 }
 
-        // 每行都用太慢：行多时隔一行取一行
-        let step = n > 600 ? 2 : 1
-        func cost(_ d: Int) -> Float? {
-            var total: Float = 0, count = 0
-            var i = max(0, -d)
-            let end = min(n, n - d)
-            while i < end {
-                if !current.lines[i].flat, !fixed[i], !fixed[i + d] {
-                    total += distance(cur[i], prev[i + d])
-                    count += 1
+        return frames.previous.data.withUnsafeBytes { prevRaw -> Int? in
+            frames.current.data.withUnsafeBytes { curRaw -> Int? in
+                guard let pb = prevRaw.baseAddress, let cb = curRaw.baseAddress else { return nil }
+                let bpr = frames.current.bytesPerRow
+                let sampleStep = max(1, span.count / 240)
+                /// 上一帧第 j 行和当前帧第 i 行的平均像素差（每个通道 0~255，取三个通道的平均）
+                func pixelDistance(_ j: Int, _ i: Int) -> Float {
+                    var total = 0, count = 0
+                    var x = span.lowerBound
+                    while x < span.upperBound {
+                        let (po, co) = axis == .vertical ? (j * bpr + x * 4, i * bpr + x * 4) : (x * bpr + j * 4, x * bpr + i * 4)
+                        let p = pb.loadUnaligned(fromByteOffset: po, as: UInt32.self)
+                        let q = cb.loadUnaligned(fromByteOffset: co, as: UInt32.self)
+                        if p != q {
+                            for shift in stride(from: 0, to: 24, by: 8) {
+                                total += abs(Int((p >> UInt32(shift)) & 0xff) - Int((q >> UInt32(shift)) & 0xff))
+                            }
+                        }
+                        count += 1
+                        x += sampleStep
+                    }
+                    return count == 0 ? 0 : Float(total) / Float(count * 3)
                 }
-                i += step
-            }
-            return count >= max(3, (end - max(0, -d)) / (10 * step)) ? total / Float(count) : nil
-        }
-        var best: (d: Int, cost: Float)?
-        var second: Float = .infinity
-        for d in candidates where d != 0 {
-            guard let c = cost(d) else { continue }
-            if let b = best {
-                if c < b.cost {
-                    // 原来最好的成了第二好（隔得近的算同一个位置附近，不算）
-                    if abs(d - b.d) > 2 { second = min(second, b.cost) }
-                    best = (d, c)
-                } else if abs(d - b.d) > 2 {
-                    second = min(second, c)
+                // 原位置几乎没变：整体都只是细微差别 → 没有滚动
+                let still = usable.reduce(Float(0)) { $0 + pixelDistance($1, $1) } / Float(usable.count)
+                if still <= 1.2 { return 0 }
+                let fixed = (0..<n).map { current.lines[$0].flat || pixelDistance($0, $0) <= 1.2 }
+
+                let cur = current.profiles, prev = previous.profiles
+                func distance(_ a: Profile, _ b: Profile) -> Float {
+                    let d = a - b
+                    return d.replacing(with: -d, where: d .< 0).sum() / 16
                 }
-            } else {
-                best = (d, c)
+                let step = n > 600 ? 2 : 1
+                func profileCost(_ d: Int) -> Float? {
+                    var total: Float = 0, count = 0
+                    var i = max(0, -d)
+                    let end = min(n, n - d)
+                    while i < end {
+                        if !current.lines[i].flat, !fixed[i], !fixed[i + d] {
+                            total += distance(cur[i], prev[i + d])
+                            count += 1
+                        }
+                        i += step
+                    }
+                    return count >= max(3, (end - max(0, -d)) / (10 * step)) ? total / Float(count) : nil
+                }
+                // 亮度轮廓最像的几个距离（相隔 3 行以上，算不同的候选）
+                var scored: [(d: Int, cost: Float)] = []
+                for d in candidates where d != 0 {
+                    if let c = profileCost(d) { scored.append((d, c)) }
+                }
+                scored.sort { $0.cost < $1.cost }
+                var picks: [Int] = []
+                for item in scored where !picks.contains(where: { abs($0 - item.d) <= 2 }) {
+                    picks.append(item.d)
+                    if picks.count == 6 { break }
+                }
+                // 逐个按像素核对
+                func pixelCost(_ d: Int) -> Float {
+                    var total: Float = 0, count = 0
+                    var i = max(0, -d)
+                    let end = min(n, n - d)
+                    while i < end {
+                        if !fixed[i], !fixed[i + d] {
+                            total += pixelDistance(i + d, i)
+                            count += 1
+                        }
+                        i += step
+                    }
+                    return count == 0 ? .infinity : total / Float(count)
+                }
+                // 最好的候选附近 ±2 行也试一下（轮廓分辨不出一两行的差别）
+                var refined: [(d: Int, cost: Float)] = []
+                for d in picks {
+                    let local = (max(-limit, d - 2)...min(limit, d + 2)).filter { $0 != 0 }.map { ($0, pixelCost($0)) }
+                    if let bestLocal = local.min(by: { $0.1 < $1.1 }) { refined.append((bestLocal.0, bestLocal.1)) }
+                }
+                refined.sort { $0.cost < $1.cost }
+                guard let best = refined.first, best.cost <= 6 else { return nil }
+                let second = refined.dropFirst().first { abs($0.d - best.d) > 2 }?.cost ?? .infinity
+                guard second >= best.cost * 1.6 + 1 else { return nil }
+                return best.d
             }
         }
-        guard let best, best.cost <= 4, second >= best.cost * 1.6 + 0.5 else { return nil }
-        return best.d
     }
 
     /// 核对：重叠部分里，参与比较的行至少 85% 对得上。不参与比较的：纯色行；
