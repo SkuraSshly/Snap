@@ -87,7 +87,22 @@ enum DebugFeatureTest {
         // 输入框里的 ⌘A / ⌘C / ⌘V / ⌘X / ⌘Z：靠隐藏的「编辑」菜单分发
         let menuKeys = Set(NSApp.mainMenu?.items.flatMap { $0.submenu?.items ?? [] }
             .filter { $0.keyEquivalentModifierMask == .command }.map(\.keyEquivalent) ?? [])
-        check("主菜单里有剪切、拷贝、粘贴、全选、撤销的快捷键", ["x", "c", "v", "a", "z"].allSatisfy(menuKeys.contains), "\(menuKeys)")
+        check("主菜单里有剪切、拷贝、粘贴、全选、撤销、退出的快捷键", ["x", "c", "v", "a", "z", "q"].allSatisfy(menuKeys.contains), "\(menuKeys)")
+        // 设置窗口可以拖边缘调大小、用绿色按钮缩放，最小是默认大小
+        let minimum = SettingsWindowController.debugCurrent?.windowWillResize(window, to: NSSize(width: 100, height: 100)) ?? .zero
+        check("设置窗口可以调整大小、缩放", window.styleMask.contains(.resizable)
+              && minimum.width >= SettingsWindowController.size.width - 0.5 && minimum.height >= SettingsWindowController.size.height - 0.5
+              && window.standardWindowButton(.zoomButton)?.isEnabled == true,
+              "可调整：\(window.styleMask.contains(.resizable))，最小：\(minimum)，绿色按钮：\(String(describing: window.standardWindowButton(.zoomButton)?.isEnabled))")
+        let before = window.frame
+        window.setFrame(before.insetBy(dx: -60, dy: -40), display: true)
+        try? await Task.sleep(for: .milliseconds(300))
+        let grown = window.contentRect(forFrameRect: window.frame).size
+        let contentFollows = (window.contentView?.subviews.first?.frame.size ?? window.contentView?.frame.size) == grown
+            || window.contentView?.frame.size == grown
+        window.setFrame(before, display: true)
+        try? await Task.sleep(for: .milliseconds(300))
+        check("设置窗口调大后内容跟着铺满", contentFollows && grown.width >= SettingsWindowController.size.width + 119, "\(grown)")
         SettingsWindowController.show(.translate)
         try? await Task.sleep(for: .milliseconds(600))
         NSApp.activate()

@@ -50,6 +50,7 @@ final class SettingsSelection: ObservableObject {
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private static var current: SettingsWindowController?
+    /// 默认大小，也是最小大小（可以拖边缘调大、用绿色按钮缩放）
     static let size = CGSize(width: 800, height: 600)
 
     private let window: NSWindow
@@ -68,7 +69,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private init(tab: SettingsTab) {
         window = NSWindow(contentRect: CGRect(origin: .zero, size: Self.size),
-                          styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: true)
         super.init()
 
@@ -83,9 +84,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         selection.tab = tab
         let root = SettingsRootView(selection: selection) { [weak self] tab in self?.select(tab) }
         let host = NSHostingController(rootView: root)
-        host.sizingOptions = []   // 窗口大小固定，不随内容变化
+        host.sizingOptions = []   // 窗口大小由用户决定，不随内容变化（最小尺寸见 windowWillResize）
         window.contentViewController = host
         window.setContentSize(Self.size)
+        applyMinimumSize()
 
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -94,7 +96,21 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.centerOnScreen()
     }
 
+    /// 最小就是默认大小。SwiftUI 的承载控制器会把窗口的最小尺寸清零，所以每次显示前再设一次，
+    /// 拖边缘时再由 windowWillResize 兜底
+    private func applyMinimumSize() {
+        window.minSize = Self.minimumFrameSize
+    }
+
+    /// 窗口外框的最小尺寸（全尺寸内容视图：外框就是内容区域）
+    static let minimumFrameSize = size
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        NSSize(width: max(frameSize.width, Self.minimumFrameSize.width), height: max(frameSize.height, Self.minimumFrameSize.height))
+    }
+
     private func present() {
+        applyMinimumSize()
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
     }
@@ -147,7 +163,8 @@ private struct SettingsRootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(width: SettingsWindowController.size.width, height: SettingsWindowController.size.height)
+        .frame(minWidth: SettingsWindowController.size.width, maxWidth: .infinity,
+               minHeight: SettingsWindowController.size.height, maxHeight: .infinity)
         .fontDesign(.rounded)
         .tint(.apricot)
         .background(WarmWindowBackground())
@@ -171,6 +188,10 @@ private struct SettingsSidebar: View {
     let onSelect: (SettingsTab) -> Void
 
     private let rowHeight: CGFloat = 38
+
+    /// 直接读包里的图标文件（不用 NSApp.applicationIconImage：那个可能是系统缓存的旧图标，重装后不一定刷新）
+    private static let appIcon: NSImage = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+        .flatMap { NSImage(contentsOf: $0) } ?? NSApp.applicationIconImage
     private let tabs = SettingsTab.allCases
 
     var body: some View {
@@ -179,7 +200,7 @@ private struct SettingsSidebar: View {
             Spacer().frame(height: 52)
             // 图标 + 名字，一行、垂直居中（图标四周自带约 10% 的透明边，所以往左让一点，和下面的栏目图标对齐）
             HStack(spacing: 7) {
-                Image(nsImage: NSApp.applicationIconImage)
+                Image(nsImage: Self.appIcon)
                     .resizable()
                     .interpolation(.high)
                     .frame(width: 40, height: 40)

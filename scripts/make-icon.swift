@@ -179,8 +179,9 @@ func scene(pixels: Int) -> CGImage {
         blade(leftBlade, [0xFFD3AE, 0xFDB083, 0xF88E63, 0xEE714F], alpha: 1)
         blade(rightBlade, [0xFFA27A, 0xF7784F, 0xE8544D, 0xC93A4E], alpha: 1)
     } else {
-        blade(leftBlade, [0xFFE6CC, 0xFFC8A2, 0xFBA27A, 0xF2805E], alpha: 0.86)
-        blade(rightBlade, [0xFFBC98, 0xFB9068, 0xEF6A5C, 0xD94D5E], alpha: 0.86)
+        // 和清晰版同样饱和的颜色，只留一点点透明，让后面的薄纱隐约透出来
+        blade(leftBlade, [0xFFD3AE, 0xFDB083, 0xF88E63, 0xEE714F], alpha: 0.94)
+        blade(rightBlade, [0xFFA27A, 0xF7784F, 0xE8544D, 0xC93A4E], alpha: 0.95)
     }
 
     // 6. 扫描线：一道细亮线 + 虚化的辉光
@@ -206,7 +207,7 @@ func scene(pixels: Int) -> CGImage {
         for _ in 0..<46 {   // 扫描线附近
             let x = 150 + random.next() * 724
             let y = scanY + (random.next() - 0.5) * 70 * (0.3 + random.next())
-            dots.append((CGPoint(x: x, y: y), 1.2 + random.next() * 3.2, 0.25 + random.next() * 0.6,
+            dots.append((CGPoint(x: x, y: y), 2.0 + random.next() * 4.0, 0.35 + random.next() * 0.55,
                          random.next() < 0.5 ? 0xFFFFFF : 0xF58A5E))
         }
         for i in 0..<34 {   // 从箭尖向左上散开，越远越小越淡
@@ -214,7 +215,7 @@ func scene(pixels: Int) -> CGImage {
             let angle = 2.35 + (random.next() - 0.5) * 1.2
             let p = CGPoint(x: arrowHead.x + cos(angle) * distance, y: arrowHead.y + sin(angle) * distance)
             let fade = 1 - distance / 120
-            dots.append((p, (1.4 + random.next() * 4.2) * (0.5 + fade), max(0.12, fade) * (0.5 + random.next() * 0.5),
+            dots.append((p, (2.2 + random.next() * 4.8) * (0.5 + fade), max(0.12, fade) * (0.5 + random.next() * 0.5),
                          random.next() < 0.6 ? 0xFFFFFF : 0xF79A70))
         }
         context.draw(blurredLayer(pixels: pixels, radius: 4) { layer in
@@ -273,7 +274,7 @@ func drawCrosshair(_ context: CGContext, at p: CGPoint, size: CGFloat, weight: C
     context.addPath(path); context.setStrokeColor(color(0xE2673F)); context.setLineWidth(weight); context.strokePath()
 }
 
-/// 图标：画面 + 截图选区。选区外的画面略虚化、蒙一层白纱；原位置留虚线框和控制点；
+/// 图标：画面 + 截图选区；原位置留虚线框和控制点；
 /// 选区里那块画面像刚截下来的截图一样浮起来（清晰、带白边和投影）；右下角一个截图十字光标
 func render(pixels: Int) -> CGImage {
     let context = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0, space: srgb,
@@ -293,22 +294,13 @@ func render(pixels: Int) -> CGImage {
     context.fillPath()
     context.restoreGState()
 
-    // 1. 选区外：虚化的画面 + 一层白纱
+    // 1. 选区外：原样的画面
     context.saveGState()
     context.addPath(shape)
     context.clip()
-    if simple {
-        context.draw(crisp, in: full)
-    } else {
-        let input = CIImage(cgImage: crisp)
-        let soft = CIContext(options: [.workingColorSpace: srgb]).createCGImage(
-            input.clampedToExtent().applyingGaussianBlur(sigma: Double(2.6 * scale)).cropped(to: input.extent), from: input.extent)!
-        context.draw(soft, in: full)
-    }
-    if !simple {
-        context.setFillColor(color(0xFFFBF6, 0.16))
-        context.fill(full)
-    }
+    // 选区外不虚化、不蒙白纱，任何尺寸都保持锐利；浮起来的那块靠白边和投影突出
+    context.draw(crisp, in: full)
+
 
     // 2. 原位置：选区里留一点暗影（被截走的地方），一圈虚线框，四角控制点
     context.setFillColor(color(0x6A3A2A, 0.06))
