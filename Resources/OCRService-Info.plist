@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh-Hans</string>
 	<key>CFBundleDisplayName</key>
-	<string>Snap 文字识别</string>
+	<string>Velos 文字识别</string>
 	<key>CFBundleExecutable</key>
-	<string>SnapOCR</string>
+	<string>VelosOCR</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.snap.Snap.OCR</string>
+	<string>local.velos.Velos.OCR</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>SnapOCR</string>
+	<string>VelosOCR</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>

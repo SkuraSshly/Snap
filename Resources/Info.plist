@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh-Hans</string>
 	<key>CFBundleDisplayName</key>
-	<string>Snap</string>
+	<string>Velos</string>
 	<key>CFBundleExecutable</key>
-	<string>Snap</string>
+	<string>Velos</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.snap.Snap</string>
+	<string>local.velos.Velos</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleLocalizations</key>
@@ -19,7 +19,7 @@
 		<string>zh-Hans</string>
 	</array>
 	<key>CFBundleName</key>
-	<string>Snap</string>
+	<string>Velos</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -40,9 +40,9 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Snap · MIT 许可 · 默认不联网，不收集任何数据</string>
+	<string>Velos · MIT 许可 · 默认不联网，不收集任何数据</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Snap 需要使用麦克风，以便在录屏时录制你的声音。</string>
+	<string>Velos 需要使用麦克风，以便在录屏时录制你的声音。</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

@@ -5,7 +5,7 @@
 // 纸白底 + 几团很淡的水彩色雾 + 两条半透明、虚化的薄纱 + 前倾的「V」（Velos 在希腊语里是「箭」：左刃细、右刃粗，
 // 多段渐变的半透明玻璃片，背后一层柔光）+ 一道带辉光的扫描线（截图 / 识别文字）+ 箭尖和扫描线附近的光点 + 极细的纸面颗粒。
 // 最上面叠一个截图选区：选区里那块画面像刚截下来一样浮起来（带白边和投影），原位置留虚线框和控制点，旁边一个十字光标。
-// 菜单栏图标是同一个前倾的 V（Sources/Snap/UI/SnapIcons.swift 里的 VelosMark）。
+// 菜单栏图标是同一个前倾的 V（Sources/Velos/UI/VelosIcons.swift 里的 VelosMark）。
 import CoreGraphics
 import CoreImage
 import Foundation
@@ -84,14 +84,18 @@ func scene(pixels: Int) -> CGImage {
     let scale = CGFloat(pixels) / 1024
     context.scaleBy(x: scale, y: scale)
     let full = CGRect(x: 0, y: 0, width: 1024, height: 1024)
-    let small = pixels <= 64   // 小尺寸：去掉粒子和颗粒，线条加粗
+    let small = pixels <= 64   // 很小：线条再加粗
+    // 128 像素及以下（访达、程序坞、设置侧栏里看到的大小）用「清晰版」：不要薄纱、柔光、粒子、颗粒这些会糊成一片的细节，
+    // 两片刃不透明、颜色更饱和，扫描线加粗——缩小后依然轮廓分明
+    let simple = pixels <= 128
 
     context.saveGState()
     context.addPath(shape)
     context.clip()
 
-    // 1. 纸白底
-    context.drawLinearGradient(gradient([color(0xFDFAF5), color(0xF6EEE4), color(0xEDE2D6)], [0, 0.55, 1]),
+    // 1. 纸白底（清晰版底色稍深一点，和 V 拉开对比）
+    context.drawLinearGradient(simple ? gradient([color(0xFBF5EE), color(0xF2E7DB), color(0xE6D7C7)], [0, 0.55, 1])
+                                      : gradient([color(0xFDFAF5), color(0xF6EEE4), color(0xEDE2D6)], [0, 0.55, 1]),
                                start: CGPoint(x: 260, y: 924), end: CGPoint(x: 760, y: 100), options: extend)
 
     // 2. 水彩色雾：几团很淡的颜色，模糊后叠上去
@@ -106,7 +110,8 @@ func scene(pixels: Int) -> CGImage {
     }, in: full)
 
     // 3. 薄纱：两条半透明弧形带，从 V 后面斜穿过去，虚化
-    context.draw(blurredLayer(pixels: pixels, radius: small ? 10 : 14) { layer in
+    if !simple {
+    context.draw(blurredLayer(pixels: pixels, radius: 14) { layer in
         for (path, from, to) in [(gauze(from: CGPoint(x: 60, y: 300), to: CGPoint(x: 980, y: 700), bend: -40, thickness: 150),
                                   color(0xFFFFFF, 0.15), color(0xFFC9AE, 0.75)),
                                  (gauze(from: CGPoint(x: 40, y: 640), to: CGPoint(x: 990, y: 420), bend: 60, thickness: 110),
@@ -123,8 +128,9 @@ func scene(pixels: Int) -> CGImage {
             layer.strokePath()
         }
     }, in: full)
+    }
     // 纱上的细丝：几根很细的曲线，轻微虚化，像薄纱的织纹
-    if !small {
+    if !simple {
         context.draw(blurredLayer(pixels: pixels, radius: 1.2) { layer in
             layer.setLineWidth(1.6)
             for i in 0..<9 {
@@ -141,11 +147,13 @@ func scene(pixels: Int) -> CGImage {
     }
 
     // 4. V 背后的柔光
-    context.draw(blurredLayer(pixels: pixels, radius: 40) { layer in
-        layer.setFillColor(color(0xF58A5E, 0.45))
-        layer.addPath(leftBlade); layer.addPath(rightBlade)
-        layer.fillPath()
-    }, in: full.offsetBy(dx: 0, dy: -14))
+    if !simple {
+        context.draw(blurredLayer(pixels: pixels, radius: 40) { layer in
+            layer.setFillColor(color(0xF58A5E, 0.45))
+            layer.addPath(leftBlade); layer.addPath(rightBlade)
+            layer.fillPath()
+        }, in: full.offsetBy(dx: 0, dy: -14))
+    }
 
     // 5. 两片刃：多段渐变、略透明，叠在一起的地方更深
     func blade(_ path: CGPath, _ colors: [UInt32], alpha: CGFloat) {
@@ -164,26 +172,34 @@ func scene(pixels: Int) -> CGImage {
         context.restoreGState()
         context.addPath(path)
         context.setStrokeColor(color(0xFFFFFF, 0.7))
-        context.setLineWidth(small ? 0 : 2.5)
+        context.setLineWidth(simple ? 0 : 2.5)
         context.strokePath()
     }
-    blade(leftBlade, [0xFFE6CC, 0xFFC8A2, 0xFBA27A, 0xF2805E], alpha: 0.86)
-    blade(rightBlade, [0xFFBC98, 0xFB9068, 0xEF6A5C, 0xD94D5E], alpha: 0.86)
+    if simple {
+        blade(leftBlade, [0xFFD3AE, 0xFDB083, 0xF88E63, 0xEE714F], alpha: 1)
+        blade(rightBlade, [0xFFA27A, 0xF7784F, 0xE8544D, 0xC93A4E], alpha: 1)
+    } else {
+        blade(leftBlade, [0xFFE6CC, 0xFFC8A2, 0xFBA27A, 0xF2805E], alpha: 0.86)
+        blade(rightBlade, [0xFFBC98, 0xFB9068, 0xEF6A5C, 0xD94D5E], alpha: 0.86)
+    }
 
     // 6. 扫描线：一道细亮线 + 虚化的辉光
+    if !simple {
     context.draw(blurredLayer(pixels: pixels, radius: 12) { layer in
         layer.clip(to: CGRect(x: 120, y: scanY - 10, width: 784, height: 20))
         layer.drawLinearGradient(gradient([color(0xFF9C78, 0), color(0xFF9C78, 0.8), color(0xFF9C78, 0)], [0, 0.55, 1]),
                                  start: CGPoint(x: 120, y: 0), end: CGPoint(x: 904, y: 0), options: [])
     }, in: full)
+    }
+    let lineHeight: CGFloat = small ? 14 : (simple ? 8 : 3.6)
     context.saveGState()
-    context.clip(to: CGRect(x: 130, y: scanY - (small ? 4 : 1.8), width: 764, height: small ? 8 : 3.6))
+    context.clip(to: CGRect(x: 130, y: scanY - lineHeight / 2, width: 764, height: lineHeight))
     context.drawLinearGradient(gradient([color(0xE2673F, 0), color(0xE2673F, 0.95), color(0xFFF4EA, 1), color(0xE2673F, 0.9), color(0xE2673F, 0)],
                                         [0, 0.35, 0.55, 0.75, 1]),
                                start: CGPoint(x: 130, y: 0), end: CGPoint(x: 894, y: 0), options: [])
     context.restoreGState()
 
-    if !small {
+    if !simple {
         // 7. 光点：沿扫描线和从箭尖散开，大小、透明度各不相同；大的几颗带一点虚光
         var random = Random(state: 20261109)
         var dots: [(CGPoint, CGFloat, CGFloat, UInt32)] = []
@@ -240,20 +256,21 @@ let liftOffset = CGPoint(x: -26, y: 30)
 let liftScale: CGFloat = 1.06
 
 /// 一个十字光标（截图时的样子）：珊瑚色细十字，外面一圈白色柔光，中间留空
-func drawCrosshair(_ context: CGContext, at p: CGPoint, size: CGFloat) {
-    let arm = size / 2
+/// weight：线宽（小尺寸图标加粗，缩小后依然看得清）
+func drawCrosshair(_ context: CGContext, at p: CGPoint, size: CGFloat, weight: CGFloat = 4) {
+    let arm = size / 2, gap = weight * 1.8
     let path = CGMutablePath()
-    path.move(to: CGPoint(x: p.x - arm, y: p.y)); path.addLine(to: CGPoint(x: p.x - 7, y: p.y))
-    path.move(to: CGPoint(x: p.x + 7, y: p.y)); path.addLine(to: CGPoint(x: p.x + arm, y: p.y))
-    path.move(to: CGPoint(x: p.x, y: p.y - arm)); path.addLine(to: CGPoint(x: p.x, y: p.y - 7))
-    path.move(to: CGPoint(x: p.x, y: p.y + 7)); path.addLine(to: CGPoint(x: p.x, y: p.y + arm))
+    path.move(to: CGPoint(x: p.x - arm, y: p.y)); path.addLine(to: CGPoint(x: p.x - gap, y: p.y))
+    path.move(to: CGPoint(x: p.x + gap, y: p.y)); path.addLine(to: CGPoint(x: p.x + arm, y: p.y))
+    path.move(to: CGPoint(x: p.x, y: p.y - arm)); path.addLine(to: CGPoint(x: p.x, y: p.y - gap))
+    path.move(to: CGPoint(x: p.x, y: p.y + gap)); path.addLine(to: CGPoint(x: p.x, y: p.y + arm))
     context.setLineCap(.round)
     // 柔和的白色光晕 + 和虚线框同色的珊瑚色细线（不用系统那种黑十字，免得在浅色画面里太硬）
     context.saveGState()
     context.setShadow(offset: .zero, blur: 10, color: color(0xFFFFFF, 0.9))
-    context.addPath(path); context.setStrokeColor(color(0xFFFFFF, 0.85)); context.setLineWidth(9); context.strokePath()
+    context.addPath(path); context.setStrokeColor(color(0xFFFFFF, 0.9)); context.setLineWidth(weight * 2.3); context.strokePath()
     context.restoreGState()
-    context.addPath(path); context.setStrokeColor(color(0xE2673F)); context.setLineWidth(4); context.strokePath()
+    context.addPath(path); context.setStrokeColor(color(0xE2673F)); context.setLineWidth(weight); context.strokePath()
 }
 
 /// 图标：画面 + 截图选区。选区外的画面略虚化、蒙一层白纱；原位置留虚线框和控制点；
@@ -265,6 +282,7 @@ func render(pixels: Int) -> CGImage {
     context.scaleBy(x: scale, y: scale)
     let full = CGRect(x: 0, y: 0, width: 1024, height: 1024)
     let small = pixels <= 64
+    let simple = pixels <= 128   // 清晰版：选区外不虚化，虚线和控制点加粗，不画十字光标
     let crisp = scene(pixels: pixels)
 
     // 投影
@@ -279,29 +297,36 @@ func render(pixels: Int) -> CGImage {
     context.saveGState()
     context.addPath(shape)
     context.clip()
-    let input = CIImage(cgImage: crisp)
-    let soft = CIContext(options: [.workingColorSpace: srgb]).createCGImage(
-        input.clampedToExtent().applyingGaussianBlur(sigma: Double(2.6 * scale)).cropped(to: input.extent), from: input.extent)!
-    context.draw(soft, in: full)
-    context.setFillColor(color(0xFFFBF6, 0.16))
-    context.fill(full)
+    if simple {
+        context.draw(crisp, in: full)
+    } else {
+        let input = CIImage(cgImage: crisp)
+        let soft = CIContext(options: [.workingColorSpace: srgb]).createCGImage(
+            input.clampedToExtent().applyingGaussianBlur(sigma: Double(2.6 * scale)).cropped(to: input.extent), from: input.extent)!
+        context.draw(soft, in: full)
+    }
+    if !simple {
+        context.setFillColor(color(0xFFFBF6, 0.16))
+        context.fill(full)
+    }
 
     // 2. 原位置：选区里留一点暗影（被截走的地方），一圈虚线框，四角控制点
     context.setFillColor(color(0x6A3A2A, 0.06))
     context.fill(selection)
     if !small {
-        context.setLineWidth(4)
+        context.setLineWidth(simple ? 10 : 4)
         context.setStrokeColor(color(0xFFFFFF, 0.95))
         context.stroke(selection)
-        context.setLineDash(phase: 0, lengths: [16, 12])
+        context.setLineDash(phase: 0, lengths: simple ? [30, 22] : [16, 12])
         context.setStrokeColor(color(0xE2673F))
         context.stroke(selection)
         context.setLineDash(phase: 0, lengths: [])
         for x in [selection.minX, selection.maxX] {
             for y in [selection.minY, selection.maxY] {
-                let dot = CGRect(x: x - 11, y: y - 11, width: 22, height: 22)
+                let r: CGFloat = simple ? 20 : 11
+                let dot = CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)
                 context.setFillColor(color(0xFFFFFF)); context.fillEllipse(in: dot)
-                context.setStrokeColor(color(0xE2673F)); context.setLineWidth(4); context.strokeEllipse(in: dot)
+                context.setStrokeColor(color(0xE2673F)); context.setLineWidth(simple ? 8 : 4); context.strokeEllipse(in: dot)
             }
         }
     }
@@ -326,11 +351,15 @@ func render(pixels: Int) -> CGImage {
     context.restoreGState()
     context.addPath(card)
     context.setStrokeColor(color(0xFFFFFF))
-    context.setLineWidth(small ? 14 : 7)
+    context.setLineWidth(small ? 16 : (simple ? 11 : 7))
     context.strokePath()
 
-    // 4. 十字光标：停在选区右下角（刚拖完选区的位置）
-    if !small {
+    // 4. 十字光标：停在选区右下角（刚拖完选区的位置）；小尺寸加大加粗
+    if small {
+        drawCrosshair(context, at: CGPoint(x: selection.maxX + 44, y: selection.minY - 44), size: 120, weight: 22)
+    } else if simple {
+        drawCrosshair(context, at: CGPoint(x: selection.maxX + 40, y: selection.minY - 40), size: 104, weight: 12)
+    } else {
         drawCrosshair(context, at: CGPoint(x: selection.maxX + 34, y: selection.minY - 34), size: 74)
     }
     context.restoreGState()

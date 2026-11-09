@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="docs/images/icon.png" width="128" alt="Snap 图标">
+  <img src="docs/images/icon.png" width="160" alt="Velos 图标">
 </p>
 
-<h1 align="center">Snap</h1>
+<h1 align="center">Velos</h1>
 
 <p align="center">
-  轻量、原生的 macOS 截图、录屏与截屏翻译工具<br>
-  4.7 MB · 空闲内存约 14 MB · 默认不联网 · 不收集任何数据 · 无第三方依赖
+  轻量、原生的 macOS 截图、长截图、录屏与截屏翻译工具<br>
+  下载 2.5 MB · 空闲内存约 13 MB · 默认不联网 · 不收集任何数据 · 无第三方依赖
 </p>
 
 <p align="center">
-  <a href="https://github.com/SkuraSshly/Snap/releases/latest"><b>下载</b></a> ·
+  <a href="https://github.com/SkuraSshly/Velos/releases/latest"><b>下载</b></a> ·
   <a href="#快捷键">快捷键</a> ·
   <a href="docs/使用说明.md">使用说明</a> ·
   <a href="docs/卸载说明.md">卸载说明</a>
@@ -20,17 +20,19 @@
   <img src="docs/images/screenshot-annotate.png" width="640" alt="截图后直接在原位标注">
 </p>
 
+Velos（βέλος）在希腊语里是「箭」：像箭一样快、准地截下屏幕上的东西。图标上那一块从画面里浮起来的，就是刚截下来的截图。
+
 ## 特点
 
 - **一键截图**：<kbd>⌥A</kbd> 冻结画面后框选，自动识别窗口，放大镜精确到像素；再按一次 <kbd>⌥A</kbd> 切换全屏。
 - **原位标注**：矩形、椭圆、箭头、直线、画笔、荧光笔、文字、序号、马赛克、模糊；粗细 / 字号用拉条精确到 1 点；矩形、椭圆可选实心，文字可加底色；选中后拖控制点调整大小，按住直接拖动；支持撤销 / 重做。
 - **钉图**：把截图钉在屏幕最上层，可缩放、调透明度，方便对照；长截图钉出来可以在窗口里滚动翻看。
-- **长截图**：框选后点工具栏的剪刀按钮，滚动页面（竖向或横向），Snap 边滚边拼接：顶部标题栏、底部输入框只出现一次，左右不动的边栏不会重复，滚动条不影响拼接；可以「自动滚动」，快速滚动时自动放慢不漏内容（这两项需要辅助功能权限）。
+- **长截图**：框选后点工具栏的剪刀按钮，滚动页面（竖向或横向），Velos 边滚边拼接：顶部标题栏、底部输入框只出现一次，左右不动的边栏不会重复，滚动条不影响拼接，滚到底的回弹空白不会拼进去。打开「自动滚动」后把鼠标移到页面上就一下下往下滚，移开就停，不会移动你的鼠标；快速手动滚动时自动放慢，不漏内容（这两项需要辅助功能权限）。完成后可以直接编辑、钉在屏幕上或保存。
 - **编辑与查看**：单击缩略图打开编辑窗口继续标注；按住 <kbd>⌥</kbd> 滚动缩放（最大 400%），长截图按原像素宽度打开、上下滚动查看。
 - **高质量输出**：Retina 原生像素，写入色彩配置文件（Display P3 / sRGB），PNG / HEIC / JPEG。
 - **录屏**：<kbd>⌥S</kbd> 区域或全屏；HEVC / H.264 硬件编码；系统声音与麦克风实时混成一条 AAC 音轨；暂停时那一段不进视频。
-- **录制辅助**：3 秒倒计时、鼠标点击高亮、浮动控制条、红框标出录制范围（控制条和红框都不会被录进去）。
-- **截屏翻译**：<kbd>⌥D</kbd> 框选后离线识别文字（Vision），用 Apple 翻译离线翻译，译文逐段显示；单个单词查 macOS 自带词典；结果窗口可钉住、多开、朗读。可选在线引擎（有道、DeepL、微软、百度、腾讯、火山、OpenAI 兼容大模型、Claude），默认全部关闭，Key 存在钥匙串里。
+- **录制辅助**：3 秒倒计时、鼠标点击高亮、浮动控制条、红框标出录制范围（控制条和红框都不会被录进去）。录制中照样可以截图、截屏翻译，它们的界面会一起录进视频，方便做教程。
+- **截屏翻译**：<kbd>⌥D</kbd> 框选后离线识别文字（Vision），用 Apple 翻译离线翻译，译文逐段显示；单个单词查 macOS 自带词典；结果窗口可钉住、多开、朗读。也可以在设置的「在线翻译」里选一家服务商、填自己的 Key 启用（腾讯、火山、百度、有道、DeepL、微软，或 OpenAI 兼容的大模型、Claude；想免费用可以选腾讯翻译君、火山翻译的免费额度，或智谱的免费模型 glm-4-flash）。默认全部关闭，Key 只存在本机钥匙串里。
 - **GIF 导出**：自带流式 GIF 编码器，边转边写文件，内存占用很低（3 秒的 2560×1440 全屏录屏转成 960 宽的 GIF 不到 1 秒）。
 - **轻量**：常驻菜单栏，空闲时不运行任何屏幕采集，CPU 为 0。
 
@@ -63,17 +65,20 @@
   </tr>
 </table>
 
-> 预览图里的「桌面」是 Snap 的调试模式自己画的演示画面（见下文「开发」），不是真实屏幕。
+> 预览图里的「桌面」是 Velos 的调试模式自己画的演示画面（见下文「开发」），不是真实屏幕。
 
 ## 安装
 
 需要 **macOS 15 或更新**、**Apple 芯片**的 Mac。
 
-1. 在 [Releases](https://github.com/SkuraSshly/Snap/releases/latest) 下载 `Snap-2.0.dmg`，打开后把 Snap 拖进「应用程序」。
-2. 打开 Snap。第一次运行会出现权限引导：
-   - **屏幕与系统录音**（必需）：截图、录屏都需要。授权后按提示重新打开 Snap。
+1. 在 [Releases](https://github.com/SkuraSshly/Velos/releases/latest) 下载 `Velos-2.0.dmg`，打开后把 Velos 拖进「应用程序」。
+2. 打开 Velos。第一次运行会出现权限引导：
+   - **屏幕与系统录音**（必需）：截图、录屏都需要。授权后按提示重新打开 Velos。
    - **麦克风**（可选）：只在录屏时录自己的声音才需要。
    - **辅助功能**（可选）：只在长截图的自动滚动、滚动限速时需要，第一次用到时会请求。
+
+> **用过旧版 Snap？** Velos 就是改名后的 Snap。第一次打开 Velos 时会自动搬来 Snap 的设置（快捷键、保存位置等）；
+> 系统权限要给 Velos 重新打开一次。旧 Snap 留在权限列表、登录项里的记录可以手动删掉，见 [卸载说明](docs/卸载说明.md#从旧版-snap-升级后的清理)。
 
 > **第一次打开被 macOS 拦下？** 这个版本没有使用 Apple 开发者证书签名、也没有经过公证，
 > macOS 会提示「无法验证开发者」。到 **系统设置 › 隐私与安全性**，在页面下方点 **「仍要打开」** 即可，只需一次。
@@ -102,7 +107,7 @@
 | 编辑窗口 | <kbd>⌥</kbd> + 滚动 / 双指捏合 | 以鼠标为中心缩放 |
 | 编辑窗口 | <kbd>⌘=</kbd> / <kbd>⌘-</kbd> / <kbd>⌘0</kbd> | 放大 / 缩小 / 回到原来大小 |
 
-快捷键可以在 设置 › 快捷键 里修改，并会检查冲突（常用编辑快捷键、macOS 系统快捷键、Snap 自己的另一个快捷键）。
+快捷键可以在 设置 › 快捷键 里修改，并会检查冲突（常用编辑快捷键、macOS 系统快捷键、Velos 自己的另一个快捷键）。
 
 ## 文件保存在哪
 
@@ -112,7 +117,7 @@
 | 录屏 | `~/Movies/ScreenRecordings` | 录制时自动写入 |
 | GIF | 与对应的录屏放在一起 | 点「GIF」导出时 |
 
-位置可以在 设置 › 通用 里修改。Snap 写到电脑上的全部内容见 [卸载说明](docs/卸载说明.md)。
+位置可以在 设置 › 通用 里修改。Velos 写到电脑上的全部内容见 [卸载说明](docs/卸载说明.md)。
 
 ## 隐私
 
@@ -122,8 +127,8 @@
 
 ## 已知限制
 
-- macOS 会定期弹出「Snap 正在访问你的屏幕」的确认框（大约每月一次或系统更新后），这是 macOS 对所有录屏类 App 的系统行为。
-- 已被 macOS 占用的组合键（如 <kbd>⇧⌘3</kbd>）按下时由系统直接处理，不能设为 Snap 的快捷键。
+- macOS 会定期弹出「Velos 正在访问你的屏幕」的确认框（大约每月一次或系统更新后），这是 macOS 对所有录屏类 App 的系统行为。
+- 已被 macOS 占用的组合键（如 <kbd>⇧⌘3</kbd>）按下时由系统直接处理，不能设为 Velos 的快捷键。
 - 菜单栏菜单、钉图右键菜单是系统原生菜单，样式无法自定义。
 - GIF 每帧最多 256 色，大面积渐变和照片会有色带。
 - 用蓝牙耳机的麦克风录音时，macOS 会把耳机切到通话模式，系统声音的音质随之下降。
@@ -133,51 +138,57 @@
 只需要 Xcode 命令行工具（`xcode-select --install`），不需要完整的 Xcode，也没有任何第三方依赖。
 
 ```bash
-git clone https://github.com/SkuraSshly/Snap.git
-cd Snap
-./build.sh          # 编译 release 版，生成 build/Snap.app
-open build/Snap.app
+git clone https://github.com/SkuraSshly/Velos.git
+cd Velos
+./build.sh          # 编译 release 版，生成 build/Velos.app
+open build/Velos.app
 ```
 
 | 命令 | 作用 |
 |---|---|
-| `./build.sh` | 编译 release 版，生成 `build/Snap.app` |
+| `./build.sh` | 编译 release 版，生成 `build/Velos.app` |
 | `./build.sh debug` | 编译调试版（包含自测代码） |
-| `./run.sh` | 编译并重新启动 Snap |
-| `./package.sh` | 打包成 `dist/Snap-版本号.dmg` 和 `.zip` |
+| `./run.sh` | 编译并重新启动 Velos |
+| `./package.sh` | 打包成 `dist/Velos-版本号.dmg` 和 `.zip` |
 
 本机构建使用 ad-hoc 签名，并把签名的「指定要求」设为 bundle id，重新编译后已授予的屏幕录制权限依然有效。
 
 ## 开发
 
-源码在 `Sources/Snap`，按功能分文件夹：
+源码在 `Sources/Velos`，按功能分文件夹：
 
 | 文件夹 | 内容 |
 |---|---|
 | `Capture` | 快捷键调度、冻屏 |
 | `Overlay` | 选区界面：窗口识别、控制点、放大镜、提示条 |
-| `Screenshot` · `Annotation` · `Pin` | 截图输出、标注、钉图 |
+| `Screenshot` · `Annotation` · `Pin` | 截图输出、标注、编辑窗口、钉图 |
+| `LongCapture` | 长截图：边滚边截取、拼接、自动滚动、滚动限速 |
+| `ScreenTranslate` | 截屏翻译：结果窗口、Apple 翻译、在线引擎、查词 |
 | `Recording` | 录屏引擎、实时混音、控制条、倒计时、点击高亮、GIF 编码 |
 | `Thumbnail` | 截图 / 录屏完成后的缩略图 |
 | `Hotkeys` · `MenuBar` · `Settings` · `Permissions` | 全局快捷键与冲突检测、菜单栏、设置、权限引导 |
-| `UI` | 温暖磨砂风格的控件 |
+| `UI` | 温暖磨砂风格的控件、自绘图标 |
+
+文字识别（Vision）和语言检测在 `Sources/VelosOCRKit`，由单独的识别服务进程 `Sources/VelosOCRService`（`VelosOCR.xpc`）调用，空闲 30 秒自动退出。
 
 调试版内置自测（测试中改动的设置会恢复）：
 
 | 环境变量 | 内容 |
 |---|---|
-| `SNAP_UITEST=目录` | 截图界面：在合成画面上走一遍所有交互（不读取真实屏幕） |
-| `SNAP_RECTEST=目录` | 录屏：混音、音轨、暂停、音画同步、控制条、缩略图。会真实录制屏幕左下角一小块几秒钟（只核对文件参数和声音响度，测完删除），并播放一声系统提示音 |
-| `SNAP_FEATURETEST=目录` | 快捷键冲突、倒计时、点击高亮、GIF 导出等 |
-| `SNAP_SHOWCASE=目录` | 生成本页的预览图（演示桌面 + 只截取 Snap 自己的窗口） |
+| `VELOS_UITEST=目录` | 截图界面：在合成画面上走一遍所有交互（不读取真实屏幕） |
+| `VELOS_RECTEST=目录` | 录屏：混音、音轨、暂停、音画同步、控制条、缩略图。会真实录制屏幕左下角一小块几秒钟（只核对文件参数和声音响度，测完删除），并播放一声系统提示音 |
+| `VELOS_FEATURETEST=目录` | 快捷键冲突、倒计时、点击高亮、GIF 导出等 |
+| `VELOS_AUTOSCROLL_E2E=目录` | 长截图端到端：在每块屏幕上用合成页面测手动快速滚动和三档自动滚动，逐行核对拼接结果 |
+| `VELOS_SHOWCASE=目录` | 生成本页的预览图（演示桌面 + 只截取 Velos 自己的窗口） |
+| `VELOS_SETTINGS_SHOTS=目录` | 只拍设置窗口的各个页面 |
 
-例如：`open --env SNAP_UITEST=/tmp/snaptest build/Snap.app`（先 `./build.sh debug`），结果写在 `result.txt`。
+例如：`open --env VELOS_UITEST=/tmp/velostest build/Velos.app`（先 `./build.sh debug`），结果写在 `result.txt`。
 
-App 图标由 `scripts/make-icon.swift` 用代码绘制生成。
+App 图标由 `scripts/make-icon.swift` 用代码绘制生成（只用系统自带的 Core Graphics / Core Image）：每个尺寸按自己的像素单独绘制，128 像素及以下用去掉虚化细节的清晰版，Dock、访达里也不会糊。菜单栏图标在 `Sources/Velos/UI/VelosIcons.swift` 里绘制。
 
 ## 卸载
 
-见 [卸载说明](docs/卸载说明.md)：列出了 Snap 在电脑上留下的全部内容和删除方法。
+见 [卸载说明](docs/卸载说明.md)：列出了 Velos 在电脑上留下的全部内容和删除方法。
 
 ## 许可证
 
