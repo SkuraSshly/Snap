@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugSnapshots.runIfRequested()
         DebugSnapshots.runSelfTestIfRequested()
         DebugUITest.runIfRequested()
+        DebugAutoScrollProbe.runIfRequested()
         DebugRecordingTest.runIfRequested()
         DebugFeatureTest.runIfRequested()
         DebugShowcase.runIfRequested()

@@ -43,6 +43,8 @@ final class LongCaptureSession {
     /// 滚动方向的正负：合成的滚轮事件里负数是往下 / 往右；万一系统反过来，开始一秒没有进展就换一次方向
     private var autoSign: Int32 = -1
     private var flippedOnce = false
+    /// 自动滚动的这次手势（开始 → 进行中… → 结束）
+    private var autoGesture: ScrollGesture?
 
     init(region: CGRect, screen: NSScreen) {
         self.region = region
@@ -207,9 +209,11 @@ final class LongCaptureSession {
         }
         // 刚给了权限：顺便装上限速
         if scrollTap == nil { installThrottle() }
-        // 滚动事件发给鼠标下面的窗口：先把指针移到选区中间
+        // 滚动事件交给鼠标指针下面的窗口：先把指针移到选区中间
         CGWarpMouseCursorPosition(cgCenter)
         CGAssociateMouseAndMouseCursorPosition(1)
+        autoGesture = ScrollGesture(axis: axis)
+        Log.capture.notice("长截图：开始自动滚动")
         autoStarted = .now
         lastProgress = .now
         autoAppended = false
@@ -238,17 +242,21 @@ final class LongCaptureSession {
         let extent = axis == .vertical ? region.height : region.width
         // 每秒约 3 个选区高度（每 0.05 秒滚 15%），相邻两帧重叠很多，又不至于慢得等不及
         let amount = Int32(max(12, min(320, extent * 0.15 * Preferences.shared.longCaptureAutoSpeed.factor))) * autoSign
-        let event = axis == .vertical
-            ? CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)
-            : CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: amount, wheel3: 0)
-        event?.location = cgCenter
-        event?.setIntegerValueField(.eventSourceUserData, value: LongCaptureScrollTap.marker)   // 速度已经可控，不再限速
-        event?.post(tap: .cghidEventTap)
+        // 鼠标移出了选区：滚动事件会发到别的窗口去，停下
+        guard region.contains(NSEvent.mouseLocation) else {
+            stopAutoScroll()
+            overlay.message = "鼠标移出了选区，自动滚动已停止。把鼠标放回选区里，再点「自动滚动」"
+            return
+        }
+        autoGesture?.scroll(amount, at: cgCenter)
     }
 
     private func stopAutoScroll() {
+        if autoTimer != nil { Log.capture.notice("长截图：停止自动滚动") }
         autoTimer?.invalidate()
         autoTimer = nil
+        autoGesture?.end(at: cgCenter)
+        autoGesture = nil
         bar.isAutoScrolling = false
     }
 

@@ -2196,3 +2196,167 @@ final class MockLLMServer: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 #endif
+#if DEBUG
+/// 诊断：自动滚动发出的滚动事件能不能让页面动起来。
+/// 在屏幕中间开一个 Snap 自己的测试窗口（很长的可滚动页面，不涉及用户内容），把指针移过去，按自动滚动的方式发事件，
+/// 记下页面滚了多少。用法：open --env SNAP_AUTOSCROLL_PROBE=/输出目录 build/Snap.app
+enum DebugAutoScrollProbe {
+    static func runIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["SNAP_AUTOSCROLL_PROBE"] else { return }
+        let dir = URL(fileURLWithPath: path, isDirectory: true)
+        Task { @MainActor in
+            var lines: [String] = []
+            lines.append("辅助功能（PostEvent）权限：\(CGPreflightPostEventAccess())，辅助功能信任（AXIsProcessTrusted）：\(AXIsProcessTrusted())")
+            var received = 0
+            var sample = ""
+            var others = 0
+            let monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+                // 只统计我们自己发的（来源标记为 0）；平滑滚动工具发的事件带它自己的标记
+                guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) == 0 else {
+                    others += 1
+                    return event
+                }
+                received += 1
+                if received == 1 {
+                    sample = "窗口「\(event.window?.title ?? "无")」 dy=\(event.scrollingDeltaY) 精细=\(event.hasPreciseScrollingDeltas) "
+                        + "phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue) "
+                        + "userData=\(event.cgEvent?.getIntegerValueField(.eventSourceUserData) ?? -1)"
+                }
+                return event
+            }
+            guard let screen = NSScreen.main else { return }
+            let frame = CGRect(x: screen.frame.midX - 200, y: screen.frame.midY - 160, width: 400, height: 320)
+            let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.title = "Snap 自动滚动诊断"
+            window.level = .floating
+            let scroll = NSScrollView(frame: CGRect(origin: .zero, size: frame.size))
+            let document = StripeView(frame: CGRect(x: 0, y: 0, width: 400, height: 4000))
+            scroll.documentView = document
+            scroll.hasVerticalScroller = true
+            window.contentView = scroll
+            window.orderFrontRegardless()
+            // 从最上面开始（文档坐标原点在左上角，往下滚时 bounds.origin.y 变大）
+            document.scroll(.zero)
+            try? await Task.sleep(for: .milliseconds(600))
+            let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+            let windowRect = window.convertToScreen(scroll.convert(scroll.bounds, to: nil))
+            let center = CGPoint(x: windowRect.midX, y: primaryHeight - windowRect.midY)
+            func offset() -> CGFloat { scroll.contentView.bounds.origin.y }
+
+            func trial(_ name: String, warp: Bool, _ post: (Int) -> Void) async {
+                // 每次都从页面中间开始：往上、往下都看得出来
+                document.scroll(CGPoint(x: 0, y: 1500))
+                try? await Task.sleep(for: .milliseconds(100))
+                let before = offset()
+                if warp {
+                    CGWarpMouseCursorPosition(center)
+                    CGAssociateMouseAndMouseCursorPosition(1)
+                }
+                received = 0
+                sample = ""
+                try? await Task.sleep(for: .milliseconds(200))
+                received = 0
+                for k in 0..<8 {
+                    post(k)
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                try? await Task.sleep(for: .milliseconds(300))
+                let mouse = NSEvent.mouseLocation
+                lines.append("\(name)：页面移动 \(Int(offset() - before)) 点，收到我们的 \(received) 个（其他程序的 \(others) 个），指针在窗口里：\(windowRect.contains(mouse))；第一个：\(sample)")
+                others = 0
+            }
+            // 新的自动滚动方式：像触控板一样带手势阶段，发给指针下面的窗口
+            var gesture = ScrollGesture(axis: .vertical)
+            await trial("N 新方式（ScrollGesture），-60（往下）", warp: true) { k in
+                gesture.scroll(-60, at: center)
+                if k == 7 { gesture.end(at: center) }
+            }
+            gesture = ScrollGesture(axis: .vertical)
+            await trial("N2 新方式，+60（往上）", warp: true) { k in
+                gesture.scroll(60, at: center)
+                if k == 7 { gesture.end(at: center) }
+            }
+            await trial("A2 像素单位 -60，不带标记", warp: true) { _ in
+                let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0)
+                e?.location = center
+                e?.post(tap: .cghidEventTap)
+            }
+            await trial("A3 像素单位 -60，标记换成 1", warp: true) { _ in
+                let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0)
+                e?.location = center
+                e?.setIntegerValueField(.eventSourceUserData, value: 1)
+                e?.post(tap: .cghidEventTap)
+            }
+            // 像触控板一样带手势阶段（开始 / 进行中 / 结束）：平滑滚动工具只处理鼠标滚轮，触控板的事件原样放过
+            func phased(_ k: Int, _ amount: Int32) -> CGEvent? {
+                let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)
+                e?.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                e?.setIntegerValueField(.scrollWheelEventScrollPhase, value: k == 0 ? 1 : (k == 7 ? 4 : 2))
+                e?.location = center
+                return e
+            }
+            await trial("J 带手势阶段，系统通道，-60（往下）", warp: true) { k in phased(k, -60)?.post(tap: .cghidEventTap) }
+            await trial("J2 带手势阶段，系统通道，+60（往上）", warp: true) { k in phased(k, 60)?.post(tap: .cghidEventTap) }
+            await trial("K 带手势阶段，直接发给程序，-60", warp: false) { k in
+                guard let e = phased(k, -60) else { return }
+                e.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+                e.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
+                e.postToPid(ProcessInfo.processInfo.processIdentifier)
+            }
+            // 直接调用滚动视图（排除「滚动视图本身不响应」）
+            let before = offset()
+            if let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0),
+               let ns = NSEvent(cgEvent: e) {
+                scroll.scrollWheel(with: ns)
+            }
+            lines.append("H 直接交给滚动视图：页面移动 \(Int(offset() - before)) 点")
+            await trial("C 行单位 -3（不带标记）", warp: true) { _ in
+                let e = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -3, wheel2: 0, wheel3: 0)
+                e?.location = center
+                e?.post(tap: .cghidEventTap)
+            }
+            await trial("D 发到会话层（cgSessionEventTap）", warp: true) { _ in
+                let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0)
+                e?.location = center
+                e?.post(tap: .cgSessionEventTap)
+            }
+            let pid = ProcessInfo.processInfo.processIdentifier
+            await trial("F 直接发给窗口所属的程序（postToPid）", warp: true) { _ in
+                let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0)
+                e?.location = center
+                e?.postToPid(pid)
+            }
+            let source = CGEventSource(stateID: .hidSystemState)
+            await trial("G 带事件来源（hidSystemState）", warp: true) { _ in
+                let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1, wheel1: -60, wheel2: 0, wheel3: 0)
+                e?.location = center
+                e?.post(tap: .cghidEventTap)
+            }
+            // 装着限速拦截时再试一次 A
+            let tap = LongCaptureScrollTap(region: CGRect(x: center.x - 200, y: center.y - 160, width: 400, height: 320),
+                                           axis: .vertical, extent: 320, framesPerSecond: 60)
+            lines.append("限速拦截：\(tap == nil ? "装不上" : "已装上")")
+            gesture = ScrollGesture(axis: .vertical)
+            await trial("E 装着限速拦截，新方式 -60（登记过，应原样放过）", warp: true) { k in
+                gesture.scroll(-60, at: center)
+                if k == 7 { gesture.end(at: center) }
+            }
+            tap?.stop()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            window.close()
+            try? lines.joined(separator: "\n").write(to: dir.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
+            DebugUITest.quitAfterTest()
+        }
+    }
+
+    private final class StripeView: NSView {
+        override var isFlipped: Bool { true }
+        override func draw(_ dirtyRect: NSRect) {
+            for i in 0..<100 {
+                (i % 2 == 0 ? NSColor.systemOrange : NSColor.white).setFill()
+                CGRect(x: 0, y: CGFloat(i) * 40, width: bounds.width, height: 40).fill()
+            }
+        }
+    }
+}
+#endif

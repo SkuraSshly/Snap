@@ -60,8 +60,12 @@ struct ScrollThrottle {
 /// 只改鼠标在选区里时、沿当前方向的滚动量；其他滚动、其他事件原样放过。长截图结束时立即移除。
 @MainActor
 final class LongCaptureScrollTap {
-    /// 自己补发的滚动事件带这个标记：拦截时直接放过，不再限速
-    static let marker: Int64 = 0x534E_4150   // "SNAP"
+    /// 正在工作的限速（长截图期间只有一个）：自己补发、自动滚动发的事件要先登记，拦截时放过
+    private(set) static weak var current: LongCaptureScrollTap?
+    /// 登记过、马上会经过这里的自己发的滚动量
+    private var ownAmounts: [Int64] = []
+    /// 补发积压时用的手势（开始 → 进行中 → 结束）
+    private var drainGesture: ScrollGesture?
 
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
@@ -94,13 +98,21 @@ final class LongCaptureScrollTap {
         self.source = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        Self.current = self
         // 每帧补发积压的滚动
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / Double(max(30, framesPerSecond)), repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.drainPending() }
         }
     }
 
+    /// 登记一个马上要发的自己的滚动（经过拦截时原样放过，不再限速）
+    func expectOwn(_ amount: Int32) {
+        ownAmounts.append(Int64(amount))
+        if ownAmounts.count > 32 { ownAmounts.removeFirst(ownAmounts.count - 32) }
+    }
+
     func stop() {
+        if Self.current === self { Self.current = nil }
         timer?.invalidate()
         timer = nil
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
@@ -115,13 +127,17 @@ final class LongCaptureScrollTap {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        guard type == .scrollWheel, event.getIntegerValueField(.eventSourceUserData) != Self.marker,
-              region.contains(event.location) else { return Unmanaged.passUnretained(event) }
+        guard type == .scrollWheel, region.contains(event.location) else { return Unmanaged.passUnretained(event) }
         let (pointField, fixedField, lineField): (CGEventField, CGEventField, CGEventField) = axis == .vertical
             ? (.scrollWheelEventPointDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventDeltaAxis1)
             : (.scrollWheelEventPointDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventDeltaAxis2)
         let delta = Double(event.getIntegerValueField(pointField))
         guard delta != 0 else { return Unmanaged.passUnretained(event) }
+        // 自己发的（自动滚动、补发积压）：已经控制过速度，原样放过
+        if let index = ownAmounts.firstIndex(of: Int64(delta)) {
+            ownAmounts.remove(at: index)
+            return Unmanaged.passUnretained(event)
+        }
         let allowed = throttle.take(delta, now: ProcessInfo.processInfo.systemUptime)
         if allowed != delta {
             // 按比例缩小这次滚动（三种单位一起改，各 App 读哪个都一致）；放行 0 时也保留事件，不打断手势的开始 / 结束
@@ -133,15 +149,17 @@ final class LongCaptureScrollTap {
         return Unmanaged.passUnretained(event)
     }
 
-    /// 补发积压的滚动：发到鼠标所在的位置（还在选区里时），带上标记
+    /// 补发积压的滚动：发给鼠标下面的窗口（还在选区里时），像触控板一样带手势阶段；补完了就结束这次手势
     private func drainPending() {
         let amount = Int32(throttle.drain(now: ProcessInfo.processInfo.systemUptime).rounded())
-        guard amount != 0, let location = CGEvent(source: nil)?.location, region.contains(location) else { return }
-        let event = axis == .vertical
-            ? CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)
-            : CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: amount, wheel3: 0)
-        event?.setIntegerValueField(.eventSourceUserData, value: Self.marker)
-        event?.location = location
-        event?.post(tap: .cghidEventTap)
+        guard let location = CGEvent(source: nil)?.location, region.contains(location) else { return }
+        guard amount != 0 else {
+            drainGesture?.end(at: location)
+            drainGesture = nil
+            return
+        }
+        let gesture = drainGesture ?? ScrollGesture(axis: axis)
+        drainGesture = gesture
+        gesture.scroll(amount, at: location)
     }
 }
