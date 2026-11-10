@@ -372,9 +372,7 @@ final class ScreenshotSession: OverlayEventHandler {
     private func updateStyle(_ change: (inout AnnotationStyle) -> Void) {
         // 从属性栏当前显示的样式改起（选中标注时显示的是它的样式）
         guard let annotator = prepareAnnotator() else { return }
-        var style = annotator.displayedStyle
-        change(&style)
-        annotator.applyStyle(style)
+        annotator.updateDisplayedStyle(change)
         refresh()
     }
 
@@ -579,8 +577,7 @@ final class ScreenshotSession: OverlayEventHandler {
         guard !isFinished else { return false }
         // 按住某个键不放产生的自动重复：切换模式、Enter、C 一律忽略（否则会疯狂来回切换）；
         // 只有方向键允许连续触发，按住不放可以持续移动选区
-        let arrowKeys = [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow]
-        if event.isARepeat && !arrowKeys.contains(Int(event.keyCode)) { return true }
+        if event.isARepeat && ArrowKey.direction(event.keyCode) == nil { return true }
 
         if hotkey.matches(event) {
             toggleMode()
@@ -588,59 +585,31 @@ final class ScreenshotSession: OverlayEventHandler {
         }
 
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        // Esc：调色盘开着时先关调色盘；之后的「结束文字输入 → 取消选中」和其他标注按键交给标注控制器（和编辑窗口共用）
+        if Int(event.keyCode) == kVK_Escape, toolbar.closeColorPicker() {
+            refresh()
+            return true
+        }
+        if let annotator, let handled = annotator.handleEditingKey(event) {
+            if handled { refresh() }
+            return handled
+        }
         switch Int(event.keyCode) {
         case kVK_Escape:
-            // 调色盘开着时 Esc 先关调色盘；正在输入文字时只结束输入（保留文字）；选中了标注时先取消选中；再按一次才退出截图
-            if toolbar.closeColorPicker() {
-                refresh()
-            } else if annotator?.isEditingText == true {
-                annotator?.endTextEditing()
-                refresh()
-            } else if annotator?.deselect() == true {
-                refresh()
-            } else {
-                cancel()
-            }
-        case kVK_Delete, kVK_ForwardDelete:
-            // 删除选中的标注（⌘Z 可以恢复）
-            guard annotator?.deleteSelection() == true else { return false }
-            refresh()
+            cancel()
         case kVK_Return, kVK_ANSI_KeypadEnter:
             complete()
         case kVK_ANSI_S where modifiers == .command:
             // ⌘S：完成并保存到文件（同时按设置复制到剪贴板、显示缩略图）
             complete(save: true)
-        case kVK_ANSI_Z where modifiers == .command:
-            annotator?.undo()
-            refresh()
-        case kVK_ANSI_Z where modifiers == [.command, .shift]:
-            annotator?.redo()
-            refresh()
+        case kVK_ANSI_Z where modifiers == .command || modifiers == [.command, .shift]:
+            break   // 还没有画过标注：没有可撤销的，吞掉按键（不发出提示音）
         case kVK_ANSI_C where modifiers.isEmpty:
             copyColor()
-        case let key where arrowKeys.contains(key) && annotator?.hasSelection == true:
-            // 选中了标注：方向键移动标注 1 点，Shift + 方向键 10 点
-            guard modifiers.subtracting(.shift).isEmpty else { return false }
-            let step: CGFloat = modifiers.contains(.shift) ? 10 : 1
-            let (dx, dy): (CGFloat, CGFloat) = switch key {
-            case kVK_LeftArrow: (-step, 0)
-            case kVK_RightArrow: (step, 0)
-            case kVK_UpArrow: (0, step)
-            default: (0, -step)
-            }
-            annotator?.moveSelection(dx: dx, dy: dy)
-            refresh()
-        case let key where arrowKeys.contains(key) && mode == .region:
-            // 方向键微调 1 像素，Shift + 方向键 10 像素（只在截图界面内有效，不是全局快捷键）
-            guard modifiers.subtracting(.shift).isEmpty else { return false }
-            let step = modifiers.contains(.shift) ? 10 : 1
-            let (dx, dy) = switch key {
-            case kVK_LeftArrow: (-step, 0)
-            case kVK_RightArrow: (step, 0)
-            case kVK_UpArrow: (0, step)
-            default: (0, -step)
-            }
-            if selector.nudge(dxPixels: dx, dyPixels: dy) { refresh() }
+        case _ where mode == .region:
+            // 方向键微调选区 1 像素，Shift + 方向键 10 像素（只在截图界面内有效，不是全局快捷键）
+            guard let direction = ArrowKey.direction(event.keyCode), let step = ArrowKey.step(modifiers) else { return false }
+            if selector.nudge(dxPixels: direction.dx * step, dyPixels: direction.dy * step) { refresh() }
         default:
             return false
         }

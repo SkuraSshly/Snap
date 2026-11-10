@@ -152,10 +152,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
     }
 
     private func updateStyle(_ change: (inout AnnotationStyle) -> Void) {
-        // 从属性栏当前显示的样式改起（选中标注时显示的是它的样式）
-        var style = annotator.displayedStyle
-        change(&style)
-        annotator.applyStyle(style)
+        annotator.updateDisplayedStyle(change)
     }
 
     private func updateToolbar() {
@@ -235,38 +232,20 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
 
     func handleKey(_ event: NSEvent) -> Bool {
         // 方向键允许按住连续移动，其他键忽略自动重复
-        let isArrow = [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow].contains(Int(event.keyCode))
-        if event.isARepeat && !isArrow { return true }
+        if event.isARepeat && ArrowKey.direction(event.keyCode) == nil { return true }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        // Esc：调色盘开着时先关调色盘；之后的「结束文字输入 → 取消选中」和其他标注按键交给标注控制器（和截图界面共用）
+        if Int(event.keyCode) == kVK_Escape, toolbar.closeColorPicker() { return true }
+        if let handled = annotator.handleEditingKey(event) { return handled }
         switch Int(event.keyCode) {
         case kVK_Escape:
-            if toolbar.closeColorPicker() {
-                break
-            } else if annotator.isEditingText {
-                annotator.endTextEditing()
-            } else if !annotator.deselect() {
-                window.close()
-            }
-        case kVK_Delete, kVK_ForwardDelete:
-            return annotator.deleteSelection()
-        case _ where isArrow && annotator.hasSelection:
-            let step: CGFloat = modifiers.contains(.shift) ? 10 : 1
-            switch Int(event.keyCode) {
-            case kVK_LeftArrow: annotator.moveSelection(dx: -step, dy: 0)
-            case kVK_RightArrow: annotator.moveSelection(dx: step, dy: 0)
-            case kVK_UpArrow: annotator.moveSelection(dx: 0, dy: step)
-            default: annotator.moveSelection(dx: 0, dy: -step)
-            }
+            window.close()
         case kVK_Return, kVK_ANSI_KeypadEnter:
             finish(save: false)
         case kVK_ANSI_S where modifiers == .command:
             finish(save: true)
         case kVK_ANSI_W where modifiers == .command:
             window.close()
-        case kVK_ANSI_Z where modifiers == .command:
-            annotator.undo()
-        case kVK_ANSI_Z where modifiers == [.command, .shift]:
-            annotator.redo()
         case kVK_ANSI_Equal where modifiers == .command || modifiers == [.command, .shift],
              kVK_ANSI_KeypadPlus where modifiers == .command:
             zoomView.zoom(by: 1.25)
