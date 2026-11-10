@@ -516,9 +516,12 @@ struct ScrollStitcher {
                     if let bestLocal = local.min(by: { $0.1 < $1.1 }) { refined.append((bestLocal.0, bestLocal.1)) }
                 }
                 refined.sort { $0.cost < $1.cost }
-                guard let best = refined.first, best.cost <= 6 else { return nil }
+                // 找不到可信的滚动距离：原位置没变的行占一半以上，是局部重画（刚滚到时没画完的部分补上了、动图换了一帧）——
+                // 当作没滚动，由调用方用这一帧更新内容；否则才是对不上
+                let localChange: Int? = (usable.count - changedRows) * 2 >= usable.count ? 0 : nil
+                guard let best = refined.first, best.cost <= 6 else { return localChange }
                 let second = refined.dropFirst().first { abs($0.d - best.d) > 2 }?.cost ?? .infinity
-                guard second >= best.cost * 1.6 + 1 else { return nil }
+                guard second >= best.cost * 1.6 + 1 else { return localChange }
                 return best.d
             }
         }

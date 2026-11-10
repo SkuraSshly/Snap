@@ -110,6 +110,27 @@ import Testing
         #expect(stitcher.length <= 130)
     }
 
+    /// 刚滚到时最下面一段还没画完（空白），下一帧画好了：拼出来的图里要换成画好的内容，不能留下空白
+    @Test func 刚滚到时没画完的部分画好后自动换上() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let header = 10, visible = 80, footer = 10
+        func unrendered(_ offset: Int) -> PixelFrame {
+            var rows = (0..<header).map { Self.pageRow($0, seed: 1) } + (offset..<(offset + visible)).map { Self.pageRow($0) }
+                + (0..<footer).map { Self.pageRow($0, seed: 2) }
+            for i in (header + visible - 20)..<(header + visible) { rows[i] = [UInt32](repeating: 0xFFFF_FFFF, count: Self.width) }
+            return Self.frame(rows)
+        }
+        stitcher.add(Self.window(offset: 0, height: visible, header: header, footer: footer))
+        for offset in stride(from: 30, through: 300, by: 30) {
+            stitcher.add(unrendered(offset))
+            stitcher.add(Self.window(offset: offset, height: visible, header: header, footer: footer))
+        }
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<header).map { Self.pageRow($0, seed: 1) } + (0..<(300 + visible)).map { Self.pageRow($0) }
+            + (0..<footer).map { Self.pageRow($0, seed: 2) }
+        #expect(Self.rows(of: image) == expected)
+    }
+
     /// 选区里大部分区域不动、只有中间一条在滚（框了整个窗口，只有对话栏在滚）：真实的滚动不能被当成「没变」
     @Test func 大部分区域不动时仍能认出滚动() throws {
         var stitcher = ScrollStitcher(axis: .vertical)
