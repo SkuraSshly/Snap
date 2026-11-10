@@ -144,7 +144,7 @@ struct ScrollStitcher {
         if reachedLimit { return .limitReached }
 
         // 还没滚动过：画面变了的话，看是不是只有一段在滚动（两侧是不动的边栏）；是的话以后只用这一段
-        if !bandResolved, first != nil, let changed = Self.changedSpan(previous, frame, axis: axis) {
+        if !bandResolved, first != nil, let changed = scrollingSpan(previous, frame) {
             let full = lineCrossCount(frame)
             if changed.count >= full * 15 / 100, changed.count <= full * 95 / 100 {
                 band = changed
@@ -619,34 +619,69 @@ struct ScrollStitcher {
     }
 
     /// 两帧之间变了的那一段（沿每一行的方向）：竖向时是哪些列有变化，横向时是哪些行有变化；没变化返回 nil
-    private static func changedSpan(_ a: PixelFrame, _ b: PixelFrame, axis: ScrollAxis) -> Range<Int>? {
+    /// 两帧之间真正在滚动的那一段（沿每一行）。
+    /// 变了的位置先分成几段（中间隔着一截没变的）：最宽的一段是正文，用它算出滚动距离；
+    /// 其他段只有「也按同样的距离移动」才算在滚动的范围里——边栏里转圈的图标、闪烁的光标、刷新的数字
+    /// 虽然也在变，但不是跟着滚动，不能因为它们就把整个边栏当成正文（否则边栏会被一段段重复拼上去）
+    private func scrollingSpan(_ previous: PixelFrame, _ frame: PixelFrame) -> Range<Int>? {
+        let runs = Self.changedRuns(previous, frame, axis: axis)
+        guard let main = runs.max(by: { $0.count < $1.count }) else { return nil }
+        guard runs.count > 1 else { return main }
+        let mainPrevious = Self.lines(of: previous, axis: axis, span: main), mainCurrent = Self.lines(of: frame, axis: axis, span: main)
+        guard let d = Self.shift(from: mainPrevious, to: mainCurrent), d != 0 else { return main }
+        var low = main.lowerBound, high = main.upperBound
+        for run in runs where run != main {
+            let a = Self.lines(of: previous, axis: axis, span: run), b = Self.lines(of: frame, axis: axis, span: run)
+            let n = b.count
+            var moved = 0, considered = 0
+            for i in max(0, -d)..<min(n, n - d) where !b[i].flat || !a[i + d].flat {
+                considered += 1
+                if b[i] == a[i + d] { moved += 1 }
+            }
+            // 这一段里有内容的行，一半以上按同样的距离移动了：也是滚动的内容（例如正文右边的图片、滚动条旁的一栏）
+            if considered > 0, moved * 2 >= considered {
+                low = min(low, run.lowerBound)
+                high = max(high, run.upperBound)
+            }
+        }
+        return low..<high
+    }
+
+    /// 两帧之间变了的位置，分成一段一段（相隔不到 12 个像素的并成一段）
+    private static func changedRuns(_ a: PixelFrame, _ b: PixelFrame, axis: ScrollAxis) -> [Range<Int>] {
         let w = a.width, h = a.height
-        return a.data.withUnsafeBytes { ra -> Range<Int>? in
-            b.data.withUnsafeBytes { rb -> Range<Int>? in
-                guard let pa = ra.baseAddress, let pb = rb.baseAddress else { return nil }
-                var low = Int.max, high = -1
+        let cross = axis == .vertical ? w : h
+        var changed = [Bool](repeating: false, count: cross)
+        a.data.withUnsafeBytes { ra in
+            b.data.withUnsafeBytes { rb in
+                guard let pa = ra.baseAddress, let pb = rb.baseAddress else { return }
                 for y in 0..<h {
                     let rowA = pa + y * a.bytesPerRow, rowB = pb + y * b.bytesPerRow
                     guard memcmp(rowA, rowB, w * 4) != 0 else { continue }
-                    switch axis {
-                    case .horizontal:
-                        low = min(low, y)
-                        high = max(high, y)
-                    case .vertical:
-                        // 只需要找最左、最右变了的列
-                        var x = 0
-                        while x < min(low, w), rowA.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self)
-                                == rowB.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self) { x += 1 }
-                        if x < w { low = min(low, x) }
-                        var r = w - 1
-                        while r > high, rowA.loadUnaligned(fromByteOffset: r * 4, as: UInt32.self)
-                                == rowB.loadUnaligned(fromByteOffset: r * 4, as: UInt32.self) { r -= 1 }
-                        high = max(high, r)
+                    if axis == .horizontal {
+                        changed[y] = true
+                        continue
+                    }
+                    for x in 0..<w where !changed[x] {
+                        if rowA.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self)
+                            != rowB.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self) { changed[x] = true }
                     }
                 }
-                return high >= low ? low..<(high + 1) : nil
             }
         }
+        var runs: [Range<Int>] = []
+        var start: Int?, last = -1
+        for (i, flag) in changed.enumerated() where flag {
+            if let s = start, i - last > 12 {
+                runs.append(s..<(last + 1))
+                start = i
+            } else if start == nil {
+                start = i
+            }
+            last = i
+        }
+        if let s = start { runs.append(s..<(last + 1)) }
+        return runs
     }
 
     /// 边栏的背景色：滚动的那一段以外，每个位置取出现最多的颜色（隔一个像素取样）

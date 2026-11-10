@@ -142,4 +142,49 @@ import Testing
         let image = try #require(stitcher.makeImage())
         #expect(Self.rows(of: image).count == header + visible + 40 + footer)
     }
+
+    // MARK: - 固定的边栏
+
+    /// 左边 40 列是滚动的正文，右边 24 列是不动的边栏（每行内容不同）；
+    /// spinner 不为 nil 时，边栏里有一小块每帧都在变的东西（转圈的加载图标、闪烁的光标之类）
+    static func sidebarFrame(offset: Int, height: Int, spinner: Int?) -> PixelFrame {
+        var rows = (0..<height).map { y -> [UInt32] in
+            let page = pageRow(offset + y), side = pageRow(y, seed: 3)
+            return Array(page[0..<40]) + Array(side[40..<64])
+        }
+        if let spinner {
+            for y in 5..<9 { for x in 58..<62 { rows[y][x] = 0xFF00_0000 | UInt32(truncatingIfNeeded: (spinner &* 7919) & 0xFFFFFF) } }
+        }
+        return frame(rows)
+    }
+
+    /// 检查：正文那几列逐行等于页面；边栏那几列在第一屏之后不再出现边栏的内容（每列是一个颜色，不是一段段重复的边栏）
+    static func checkSidebarResult(_ stitcher: ScrollStitcher, scrolled: Int, height: Int) throws {
+        let image = try #require(stitcher.makeImage())
+        let rows = Self.rows(of: image)
+        #expect(rows.count == height + scrolled)
+        guard rows.count == height + scrolled else { return }
+        for (y, row) in rows.enumerated() where Array(row[0..<40]) != Array(pageRow(y)[0..<40]) {
+            Issue.record("正文第 \(y) 行和页面不一致")
+            break
+        }
+        let below = rows[height...]
+        for x in 40..<58 where Set(below.map { $0[x] }).count > 1 {
+            Issue.record("边栏第 \(x) 列在第一屏之后还有变化的内容（边栏被当成正文重复拼上了）")
+            break
+        }
+    }
+
+    @Test func 右边不动的边栏不会一段段重复() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        for step in 0...12 { stitcher.add(Self.sidebarFrame(offset: step * 9, height: 100, spinner: nil)) }
+        try Self.checkSidebarResult(stitcher, scrolled: 12 * 9, height: 100)
+    }
+
+    /// 边栏里有个一直在变的小东西：不能因为它就把整个边栏当成在滚动
+    @Test func 边栏里有转圈图标时仍然认得出边栏() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        for step in 0...12 { stitcher.add(Self.sidebarFrame(offset: step * 9, height: 100, spinner: step)) }
+        try Self.checkSidebarResult(stitcher, scrolled: 12 * 9, height: 100)
+    }
 }
