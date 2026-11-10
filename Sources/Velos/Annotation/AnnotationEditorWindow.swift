@@ -58,11 +58,14 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         var viewSize: CGSize
         // 长截图要留出滚动条的位置：竖着长的在右边、横着长的在下面（滚动条不盖住图片）
         var scrollerRoom = CGSize.zero
+        var fitAxis = EditorZoomView.FitAxis.all
         if imageSize.height * fitWidth > maxSize.height * 1.3 {
+            fitAxis = .width
             zoom = fitWidth
             viewSize = CGSize(width: imageSize.width * zoom, height: maxSize.height)
             scrollerRoom.width = scrollerWidth
         } else if imageSize.width * fitHeight > maxSize.width * 1.3 {
+            fitAxis = .height
             zoom = fitHeight
             viewSize = CGSize(width: maxSize.width, height: imageSize.height * zoom)
             scrollerRoom.height = scrollerWidth
@@ -100,7 +103,11 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         // 窗口可以拖边缘调整大小、用绿色按钮缩放：图片区域跟着窗口变大变小（工具栏在 windowDidResize 里重新居中）
         zoomView.autoresizingMask = [.width, .height]
         content.addSubview(zoomView)
-        zoomView.onZoom = { [weak self] in self?.zoomChanged() }
+        // 跟着窗口大小自动缩放：竖着长的按宽度、横着长的按高度、其他整张放得下；最大到原图 100%
+        zoomView.fitAxis = fitAxis
+        zoomView.maxFitMagnification = 1 / zoom
+        zoomView.onZoom = { [weak self] in self?.showZoomLabel() }
+        zoomView.onScaleChange = { [weak self] in self?.scaleChanged() }
         zoomLabel.font = roundedFont(ofSize: 13, weight: .semibold, monospacedDigits: true)
         zoomLabel.textColor = .white
         zoomLabel.alignment = .center
@@ -174,12 +181,11 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - 缩放
 
-    /// 缩放后：控制点、点中范围按屏幕大小算，光标区域重新计算
-    private func zoomChanged() {
+    /// 显示比例变了（手动缩放或跟着窗口缩放）：控制点、点中范围按屏幕大小算，光标区域重新计算
+    private func scaleChanged() {
         annotator.canvasUnitsPerPoint = 1 / (fitZoom * zoomView.magnification)
         annotator.layer.setNeedsDisplay()
         window.invalidateCursorRects(for: canvas)
-        showZoomLabel()
     }
 
     /// 当前比例：100% = 原图 1 个像素对应屏幕 1 个像素（原像素）

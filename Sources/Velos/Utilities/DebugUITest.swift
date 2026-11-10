@@ -252,9 +252,19 @@ enum DebugUITest {
                 let scroll = window.contentView?.subviews.first { $0 is NSScrollView }
                 let toolbar = window.contentView?.subviews.first { $0 is AnnotationToolbar }
                 let before = window.frame, scrollBefore = scroll?.frame.size ?? .zero
+                let magnificationBefore = editor.debugZoomView.magnification
                 window.setFrame(before.insetBy(dx: -50, dy: -40), display: true)
                 let grown = scroll?.frame.size ?? .zero
                 let centered = toolbar.map { abs($0.frame.midX - (window.contentView?.bounds.midX ?? 0)) <= 1 } ?? false
+                // 图片跟着窗口：不会变小，而且在图片区域里居中（画布中心和滚动区域中心对齐）
+                let canvasInWindow = editor.debugCanvas.convert(editor.debugCanvas.bounds, to: nil)
+                let scrollInWindow = editor.debugZoomView.convert(editor.debugZoomView.bounds, to: nil)
+                let imageCentered = abs(canvasInWindow.midX - scrollInWindow.midX) <= 1.5 && abs(canvasInWindow.midY - scrollInWindow.midY) <= 1.5
+                let followed = editor.debugZoomView.magnification >= magnificationBefore - 0.001
+                check("编辑窗口拉大后图片跟着窗口：居中、不变小", imageCentered && followed,
+                      "画布 \(canvasInWindow)，区域 \(scrollInWindow)，比例 \(magnificationBefore) → \(editor.debugZoomView.magnification)")
+                // 窗口边缘那一圈不设画布的光标（留给系统显示调整大小的箭头）
+                window.invalidateCursorRects(for: editor.debugCanvas)
                 window.setFrame(before, display: true)
                 check("编辑窗口可以调整大小、缩放，图片区域跟着变、工具栏保持居中",
                       window.styleMask.contains(.resizable) && window.standardWindowButton(.zoomButton)?.isEnabled == true
@@ -354,6 +364,18 @@ enum DebugUITest {
                     let all = z.contentView.documentVisibleRect
                     check("长截图编辑窗口：按住 ⌥ 往下滚能缩小到看全整张", z.magnification == z.minMagnification
                           && all.height >= 2999, "\(all)")
+                    // 手动缩放过：拉窗口时保持用户的比例；⌘0 之后重新跟着窗口（竖着长的按宽度适配，最大 100%）
+                    let w = long.debugWindow, original = w.frame, manual = z.magnification
+                    w.setFrame(original.insetBy(dx: -60, dy: 0), display: true)
+                    check("长截图编辑窗口：手动缩放后拉窗口，比例保持不变", abs(z.magnification - manual) < 0.001,
+                          "\(manual) → \(z.magnification)")
+                    w.setFrame(original, display: true)
+                    z.zoomToFit()
+                    w.setFrame(CGRect(x: original.minX, y: original.minY, width: original.width - 150, height: original.height), display: true)
+                    let narrowed = z.magnification
+                    w.setFrame(original, display: true)
+                    check("长截图编辑窗口：⌘0 后跟着窗口——变窄时按宽度缩小，变回原宽恢复 100%",
+                          narrowed < 0.999 && abs(z.magnification - 1) < 0.001, "变窄 \(narrowed)，恢复 \(z.magnification)")
                     long.perform(.cancel)
                 }
             }

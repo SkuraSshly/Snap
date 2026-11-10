@@ -3,8 +3,28 @@ import AppKit
 /// 编辑窗口里放画布的滚动视图：按住 ⌥ 滚动以鼠标为中心缩放（双指捏合也可以），放大后普通滚动移动查看位置。
 /// 最小是整张图都看得见（长截图打开时只显示一部分，可以缩小到看全）
 final class EditorZoomView: NSScrollView {
-    /// 缩放比例变了（包括双指捏合结束时）
+    /// 用户手动缩放了（⌥ + 滚动、双指捏合、⌘= / ⌘- / ⌘0）：显示比例提示
     var onZoom: (() -> Void)?
+    /// 显示比例变了（包括跟着窗口大小自动缩放）：控制点大小、光标区域要重新算
+    var onScaleChange: (() -> Void)?
+
+    /// 跟着窗口大小自动缩放时按什么适配：整张放得下、按宽度（竖着长的长截图）、按高度（横着长的长截图）
+    enum FitAxis { case all, width, height }
+    var fitAxis = FitAxis.all
+    /// 自动缩放最多放大到多少（原图 100%）
+    var maxFitMagnification: CGFloat = 1
+    /// 还没手动缩放过：窗口变大变小时图片跟着缩放（和「预览」一样）；手动缩放后保持用户的比例，⌘0 恢复
+    private(set) var followsWindowSize = true
+
+    /// 适配比例：「桌面」（图片 + 四周边距，放大倍数 1 时的大小）放进 clip 需要的放大倍数
+    static func fitMagnification(desk: CGSize, clip: CGSize, axis: FitAxis) -> CGFloat {
+        guard desk.width > 0, desk.height > 0 else { return 1 }
+        switch axis {
+        case .all: return min(clip.width / desk.width, clip.height / desk.height)
+        case .width: return clip.width / desk.width
+        case .height: return clip.height / desk.height
+        }
+    }
 
     /// 图片下面的暖色「桌面」：浅色模式是奶咖色，深色模式是深可可色，和图片明显区分开
     static let deskColor = NSColor(name: nil) { appearance in
@@ -38,6 +58,29 @@ final class EditorZoomView: NSScrollView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// 窗口大小变了：没手动缩放过就跟着缩放；图片比窗口小时保持居中
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        fitToWindowIfFollowing()
+        recenter()
+    }
+
+    private func fitToWindowIfFollowing() {
+        guard followsWindowSize, let desk = documentView else { return }
+        let fit = Self.fitMagnification(desk: desk.frame.size, clip: contentView.frame.size, axis: fitAxis)
+        let target = min(max(fit, minMagnification), min(maxFitMagnification, maxMagnification))
+        guard abs(target - magnification) > 0.001 else { return }
+        let visible = contentView.documentVisibleRect
+        setMagnification(target, centeredAt: CGPoint(x: visible.midX, y: visible.midY))
+        onScaleChange?()
+    }
+
+    /// 让 clip 重新约束一次位置（CenteringClipView 会把比窗口小的图片放到中间）
+    private func recenter() {
+        contentView.scroll(to: contentView.bounds.origin)
+        reflectScrolledClipView(contentView)
+    }
+
     /// 系统「显示滚动条」的设置变了也保持常显的暖色滚动条
     override var scrollerStyle: NSScroller.Style {
         get { .legacy }
@@ -54,7 +97,9 @@ final class EditorZoomView: NSScrollView {
         guard event.momentumPhase.isEmpty else { return }
         let factor = Self.zoomFactor(deltaY: event.scrollingDeltaY, precise: event.hasPreciseScrollingDeltas)
         let anchor = canvas.convert(event.locationInWindow, from: nil)
+        followsWindowSize = false
         setMagnification(min(max(magnification * factor, minMagnification), maxMagnification), centeredAt: anchor)
+        onScaleChange?()
         onZoom?()
     }
 
@@ -70,14 +115,20 @@ final class EditorZoomView: NSScrollView {
     func zoom(by factor: CGFloat) {
         let visible = contentView.documentVisibleRect
         let center = CGPoint(x: visible.midX, y: visible.midY)
+        followsWindowSize = false
         setMagnification(min(max(magnification * factor, minMagnification), maxMagnification), centeredAt: center)
+        onScaleChange?()
         onZoom?()
     }
 
-    /// 回到打开时的大小（⌘0）
+    /// 回到适配窗口的大小，之后重新跟着窗口缩放（⌘0）
     func zoomToFit() {
+        followsWindowSize = true
         magnification = 1
+        fitToWindowIfFollowing()
+        recenter()
         scrollToStart()
+        onScaleChange?()
         onZoom?()
     }
 
@@ -89,7 +140,12 @@ final class EditorZoomView: NSScrollView {
         reflectScrolledClipView(contentView)
     }
 
-    @objc private func liveMagnifyEnded() { onZoom?() }
+    /// 双指捏合结束
+    @objc private func liveMagnifyEnded() {
+        followsWindowSize = false
+        onScaleChange?()
+        onZoom?()
+    }
 }
 
 /// 编辑窗口里的画布：边界（bounds）是原图的点尺寸，外框（frame）是显示尺寸，
@@ -120,8 +176,21 @@ final class EditorCanvasView: NSView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    /// 窗口边缘这一圈系统要显示调整窗口大小的箭头：画布的光标不能盖住它
+    private static let windowEdgeMargin: CGFloat = 6
+
+    private func isNearWindowEdge(_ event: NSEvent) -> Bool {
+        guard let window else { return false }
+        let p = event.locationInWindow, size = window.frame.size, m = Self.windowEdgeMargin
+        return p.x < m || p.y < m || p.x > size.width - m || p.y > size.height - m
+    }
+
     override func resetCursorRects() {
-        if let editor { addCursorRect(bounds, cursor: editor.canvasCursor) }
+        guard let editor, let window else { return }
+        // 只在可见部分、并让出窗口边缘那一圈
+        let inner = CGRect(origin: .zero, size: window.frame.size).insetBy(dx: Self.windowEdgeMargin, dy: Self.windowEdgeMargin)
+        let rect = visibleRect.intersection(convert(inner, from: nil))
+        if !rect.isEmpty { addCursorRect(rect, cursor: editor.canvasCursor) }
     }
 
     /// 跟踪鼠标移动，悬停在标注上时换成四向移动光标
@@ -132,6 +201,7 @@ final class EditorCanvasView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        guard !isNearWindowEdge(event) else { return }
         editor?.canvasCursor(at: point(event)).set()
     }
 
