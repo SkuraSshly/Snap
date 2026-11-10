@@ -74,7 +74,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         super.init()
 
         // 标题栏透明、不显示标题（窗口标题仍按栏目设置，供辅助功能和「窗口」菜单使用）
-        window.identifier = ScreenFreezer.capturableIdentifier   // 设置窗口和其他窗口一样能被截图
+        window.identifier = .velosCapturable   // 设置窗口和其他窗口一样能被截图
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true

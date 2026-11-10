@@ -90,7 +90,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         // 暖色风格：标题栏和窗口底色都是暖色的「桌面」，图片像一张纸放在上面
         window.titlebarAppearsTransparent = true
         window.backgroundColor = EditorZoomView.deskColor
-        window.identifier = ScreenFreezer.capturableIdentifier
+        window.identifier = .velosCapturable
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.editor = self

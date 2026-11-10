@@ -92,7 +92,7 @@ final class RecordingControlBar: NSPanel {
 
     private func refreshTime() {
         guard let manager else { return }
-        let text = StatusBarController.format(manager.elapsed)
+        let text = DurationFormat.clock(manager.elapsed)
         let palette = WarmPalette(for: bar)
         timeLabel.textColor = manager.isPaused ? WarmPalette.apricot : palette.ink
         if timeLabel.stringValue != text {

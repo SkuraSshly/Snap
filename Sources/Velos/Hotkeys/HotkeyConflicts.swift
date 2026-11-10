@@ -13,7 +13,11 @@ import Carbon.HIToolbox
 @MainActor
 enum HotkeyConflicts {
     /// 返回问题描述；nil 表示可以使用
-    static func problem(with hotkey: Hotkey, for action: HotkeyManager.Action) -> String? {
+    /// - Parameters:
+    ///   - assigned: 各个动作现在的快捷键（由调用方提供，这里不直接读截图调度器）
+    ///   - canRegister: 这个组合键能不能注册为全局快捷键（没被其他程序占用）
+    static func problem(with hotkey: Hotkey, for action: HotkeyManager.Action,
+                        assigned: (HotkeyManager.Action) -> Hotkey, canRegister: (Hotkey) -> Bool) -> String? {
         let modifiers = hotkey.carbonModifiers
         let strong = UInt32(cmdKey | optionKey | controlKey)
         if !hotkey.hasKnownKey {
@@ -23,7 +27,7 @@ enum HotkeyConflicts {
             return "需要包含 ⌘、⌥ 或 ⌃ 之一（只有 F1–F20 可以单独使用）。"
         }
         for other in HotkeyManager.Action.allCases where other != action {
-            if hotkey == CaptureCoordinator.shared.hotkey(for: other) {
+            if hotkey == assigned(other) {
                 return "\(hotkey.displayString) 已经是「\(other.title)」的快捷键。"
             }
         }
@@ -34,7 +38,7 @@ enum HotkeyConflicts {
             return "\(hotkey.displayString) 与 macOS 系统快捷键「\(name)」冲突。可以换一个，或先在 系统设置 › 键盘 › 键盘快捷键 里关掉它。"
         }
         // 先把自己的旧绑定让出来再试（同一个动作重新设成原来的组合键时不算冲突）
-        if hotkey != CaptureCoordinator.shared.hotkey(for: action), !HotkeyManager.shared.canRegister(hotkey) {
+        if hotkey != assigned(action), !canRegister(hotkey) {
             return "\(hotkey.displayString) 已被其他程序占用。"
         }
         return nil

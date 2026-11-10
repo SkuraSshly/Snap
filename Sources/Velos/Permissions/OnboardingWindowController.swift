@@ -29,7 +29,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         // NSHostingController 作为内容控制器时，窗口会自动贴合 SwiftUI 内容的尺寸
         window.contentViewController = NSHostingController(rootView: view)
         window.title = "Velos 权限设置"
-        window.identifier = ScreenFreezer.capturableIdentifier
+        window.identifier = .velosCapturable
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true

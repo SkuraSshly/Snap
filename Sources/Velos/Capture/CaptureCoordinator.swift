@@ -32,9 +32,15 @@ final class CaptureCoordinator {
         HotkeyManager.shared.bind(.translate, to: translateHotkey)
     }
 
+    /// 这个组合键设为某个动作的快捷键有没有问题（和其他动作重复、常用编辑快捷键、系统快捷键、被其他程序占用）；nil 表示可以用
+    func hotkeyProblem(_ hotkey: Hotkey, for action: HotkeyManager.Action) -> String? {
+        HotkeyConflicts.problem(with: hotkey, for: action, assigned: { self.hotkey(for: $0) },
+                                canRegister: { HotkeyManager.shared.canRegister($0) })
+    }
+
     /// 更换快捷键：先检查冲突，通过后注册并保存。返回问题描述，nil 表示设置成功。
     func setHotkey(_ hotkey: Hotkey, for action: HotkeyManager.Action) -> String? {
-        if let problem = HotkeyConflicts.problem(with: hotkey, for: action) { return problem }
+        if let problem = hotkeyProblem(hotkey, for: action) { return problem }
         let old = self.hotkey(for: action)
         guard HotkeyManager.shared.bind(action, to: hotkey) else {
             HotkeyManager.shared.bind(action, to: old)

@@ -48,7 +48,7 @@ final class VideoPreviewWindowController: NSWindowController, NSWindowDelegate {
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = url.lastPathComponent
-        window.identifier = ScreenFreezer.capturableIdentifier
+        window.identifier = .velosCapturable
         window.isReleasedWhenClosed = false
         window.contentAspectRatio = size
         window.centerOnScreen()

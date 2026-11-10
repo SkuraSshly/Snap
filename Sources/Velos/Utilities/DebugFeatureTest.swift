@@ -186,7 +186,7 @@ enum DebugFeatureTest {
     private static func testHotkeys(_ check: DebugUITest.Checks) {
         let coordinator = CaptureCoordinator.shared
         func problem(_ hotkey: Hotkey, _ action: HotkeyManager.Action = .screenshot) -> String? {
-            HotkeyConflicts.problem(with: hotkey, for: action)
+            coordinator.hotkeyProblem(hotkey, for: action)
         }
         check("冲突检测：没有修饰键的普通键被拒绝", problem(hk(kVK_ANSI_A, 0)) != nil)
         check("冲突检测：只有 ⇧ 被拒绝", problem(hk(kVK_ANSI_A, shiftKey)) != nil)

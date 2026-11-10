@@ -109,7 +109,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
                     text.append(NSAttributedString(attachment: attachment))
                 }
             }
-            text.append(NSAttributedString(string: " " + StatusBarController.format(duration.rounded()), attributes: [
+            text.append(NSAttributedString(string: " " + DurationFormat.clock(duration.rounded()), attributes: [
                 .font: font, .foregroundColor: ink,
             ]))
             durationBadge.setText(text)

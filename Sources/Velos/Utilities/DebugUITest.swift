@@ -429,8 +429,8 @@ enum DebugUITest {
               && Hotkey.defaultTranslate.displayString == "⌥D")
         check("⌥D 已注册为全局快捷键", HotkeyManager.shared.hotkey(for: .translate) == .defaultTranslate
               && !HotkeyManager.shared.failedActions.contains(.translate))
-        let clash1 = HotkeyConflicts.problem(with: .defaultScreenshot, for: .translate) ?? ""
-        let clash2 = HotkeyConflicts.problem(with: .defaultTranslate, for: .recording) ?? ""
+        let clash1 = coordinator.hotkeyProblem(.defaultScreenshot, for: .translate) ?? ""
+        let clash2 = coordinator.hotkeyProblem(.defaultTranslate, for: .recording) ?? ""
         check("冲突检测：⌥A、⌥S、⌥D 互相不能重复", clash1.contains("截图") && clash2.contains("截屏翻译"), "\(clash1) / \(clash2)")
 
         // 选区界面
@@ -2075,7 +2075,7 @@ enum DebugRecordingTest {
         snapshot(controlBar.contentView, "rec-2-控制条-暂停.png")
         try? await Task.sleep(for: .milliseconds(1500))
         check("暂停期间计时停住", abs(manager.elapsed - pausedElapsed) < 0.05, "\(pausedElapsed) → \(manager.elapsed)")
-        check("控制条显示的时长与实际一致", controlBar.debugTimeText == StatusBarController.format(manager.elapsed),
+        check("控制条显示的时长与实际一致", controlBar.debugTimeText == DurationFormat.clock(manager.elapsed),
               controlBar.debugTimeText)
         controlBar.debugClickPause()
         check("再点继续录制，红框恢复实线", manager.state == .recording && !frameWindow.debugIsDashed)
@@ -2169,7 +2169,7 @@ enum DebugRecordingTest {
         let thumbnails = ThumbnailManager.shared
         check("停止后右下角出现录屏缩略图", thumbnails.debugNewestVideoURL == url)
         if let view = thumbnails.debugNewestView {
-            check("缩略图显示时长", view.debugDurationText.hasSuffix(StatusBarController.format(duration.rounded())), view.debugDurationText)
+            check("缩略图显示时长", view.debugDurationText.hasSuffix(DurationFormat.clock(duration.rounded())), view.debugDurationText)
             thumbnails.debugHoverNewest()
             check("悬停出现：关闭、移到废纸篓、导出为 GIF、拷贝文件、在访达中显示",
                   Set(view.debugVisibleButtons) == ["关闭", "移到废纸篓", "导出为 GIF", "拷贝文件", "在访达中显示"], "\(view.debugVisibleButtons)")

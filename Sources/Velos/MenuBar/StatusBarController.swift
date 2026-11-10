@@ -75,7 +75,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                                    accessibilityDescription: paused ? "录制已暂停" : "正在录制")?
                 .withSymbolConfiguration(config)
             button.imagePosition = .imageLeading
-            button.attributedTitle = NSAttributedString(string: " " + Self.format(manager.elapsed), attributes: [
+            button.attributedTitle = NSAttributedString(string: " " + DurationFormat.clock(manager.elapsed), attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium),
             ])
             button.toolTip = (paused ? "录制已暂停" : "正在录制") + " · \(CaptureCoordinator.shared.recordingHotkey.displayString) 停止"
@@ -86,13 +86,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.title = ""
             button.toolTip = "Velos"
         }
-    }
-
-    /// 时长：mm:ss，超过一小时为 h:mm:ss
-    static func format(_ interval: TimeInterval) -> String {
-        let total = max(0, Int(interval))
-        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
     }
 
     // MARK: - 菜单
