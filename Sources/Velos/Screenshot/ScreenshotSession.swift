@@ -54,9 +54,8 @@ final class ScreenshotSession: OverlayEventHandler {
     private var isFinished = false
     private var startTime = ContinuousClock.now
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
-    /// 截图前正在使用的 App，结束后把焦点还给它
-    private var previousApp: NSRunningApplication?
-    private var isWatchingDeactivation = false
+    /// 截图前正在使用的 App、切到前台、被抢走前台时取消（开始时创建）
+    private var frontmost: FrontmostAppGuard?
 
     init(hotkey: Hotkey, purpose: Purpose = .screenshot) {
         self.hotkey = hotkey
@@ -80,8 +79,7 @@ final class ScreenshotSession: OverlayEventHandler {
     func start(after delay: Duration) {
         startTime = .now
         activeDisplayID = NSScreen.underMouse?.displayID ?? 0
-        let frontmost = NSWorkspace.shared.frontmostApplication
-        previousApp = frontmost == .current ? nil : frontmost
+        frontmost = FrontmostAppGuard()
         // 截图过程中如果显示器配置变了（插拔外接屏、改分辨率），底图就对不上了，直接取消
         observe(NSApplication.didChangeScreenParametersNotification) { $0.cancel() }
         Task {
@@ -184,6 +182,7 @@ final class ScreenshotSession: OverlayEventHandler {
         isFinished = true
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
+        frontmost?.stopWatching()
         hint.remove()
         magnifier.removeFromSuperview()
         toolbar.removeFromSuperview()
@@ -199,7 +198,7 @@ final class ScreenshotSession: OverlayEventHandler {
         displays.removeAll()   // 释放底图（每块屏幕十几到二十几 MB）
         NSCursor.arrow.set()
         HotkeyManager.shared.resume(hotkeyAction)
-        restorePreviousApp()
+        frontmost?.restorePreviousApp()
         onFinish?()
     }
 
@@ -219,33 +218,18 @@ final class ScreenshotSession: OverlayEventHandler {
 
     // MARK: - 前台切换
 
-    /// Velos 是否真的是系统前台 App。
-    /// 注意不能用 NSApp.isActive：不激活面板成为焦点窗口后它也会返回 true，但系统前台其实还是原来的 App。
-    private var isFrontmost: Bool {
-        NSWorkspace.shared.frontmostApplication == .current
-    }
-
-    /// 把 Velos 切到前台，这样才能显示十字准星。
-    /// 即使系统没有同意切换，遮罩仍是焦点窗口，键盘操作不受影响，只是指针保持箭头。
+    /// 把 Velos 切到前台，这样才能显示十字准星；之后被别的 App 抢走前台就取消截图
     private func activateForCursor() {
-        observeWorkspace { session, app in
-            if app == .current {
-                session.didBecomeFrontmost()
-            } else if session.isWatchingDeactivation {
-                // 用户 ⌘Tab 切走或别的程序抢到前台后，键盘就到不了截图界面了，取消截图，避免遮罩卡在屏幕上
-                Log.capture.notice("其他 App 切到前台（\(app.localizedName ?? "?", privacy: .public)），自动取消截图")
-                session.cancel()
-            }
-        }
-        // 由快捷键触发时系统会同意切换（macOS 14 起是「协作式激活」，没有用户操作时可能被拒绝）
-        NSApp.activate()
-    }
-
-    private func didBecomeFrontmost() {
-        guard !isFinished, !isWatchingDeactivation else { return }
-        isWatchingDeactivation = true
-        overlayCursor(at: mousePoint).set()
-        Log.capture.notice("Velos 已成为前台 App")
+        frontmost?.activate(onActivated: { [weak self] in
+            guard let self, !self.isFinished else { return }
+            self.overlayCursor(at: self.mousePoint).set()
+            Log.capture.notice("Velos 已成为前台 App")
+        }, onLost: { [weak self] app in
+            guard let self, !self.isFinished else { return }
+            // 用户 ⌘Tab 切走或别的程序抢到前台后，键盘就到不了截图界面了，取消截图，避免遮罩卡在屏幕上
+            Log.capture.notice("其他 App 切到前台（\(app.localizedName ?? "?", privacy: .public)），自动取消截图")
+            self.cancel()
+        })
     }
 
     /// 注册通知，会话结束时统一移除
@@ -257,26 +241,6 @@ final class ScreenshotSession: OverlayEventHandler {
             }
         }
         observers.append((NotificationCenter.default, token))
-    }
-
-    /// 监听「哪个 App 成为了前台」（系统级通知，比 NSApp.isActive 可靠）
-    private func observeWorkspace(_ action: @escaping (ScreenshotSession, NSRunningApplication) -> Void) {
-        let center = NSWorkspace.shared.notificationCenter
-        let token = center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
-            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated {
-                guard let self, !self.isFinished, let app else { return }
-                action(self, app)
-            }
-        }
-        observers.append((center, token))
-    }
-
-    /// 截图结束后把焦点还给截图前正在使用的 App
-    private func restorePreviousApp() {
-        guard isFrontmost, let previousApp, !previousApp.isTerminated else { return }
-        NSApp.yieldActivation(to: previousApp)
-        previousApp.activate(from: .current, options: [])
     }
 
     // MARK: - 模式切换与完成
@@ -432,26 +396,9 @@ final class ScreenshotSession: OverlayEventHandler {
             view.addSubview(toolbar)
         }
 
-        let bounds = view.bounds
-        let size = toolbar.frame.size
         let origin = frozen.screen.frame.origin
-        let margin: CGFloat = 8
-        var frame: CGRect
-        if mode == .region, let selection = selector.selection {
-            let s = selection.offsetBy(dx: -origin.x, dy: -origin.y)
-            frame = CGRect(x: s.maxX - size.width, y: s.minY - margin - size.height, width: size.width, height: size.height)
-            if frame.minY < bounds.minY + 4 {
-                // 下方放不下：放到选区上方（让出尺寸标签的位置）
-                frame.origin.y = s.maxY + margin + 22
-                if frame.maxY > bounds.maxY - 4 {
-                    frame.origin.y = s.minY + margin   // 上下都放不下：放在选区内底部
-                }
-            }
-        } else {
-            frame = CGRect(x: (bounds.width - size.width) / 2, y: 28, width: size.width, height: size.height)
-        }
-        frame.origin.x = min(max(frame.minX, bounds.minX + 4), bounds.maxX - size.width - 4)
-        toolbar.setFrameOrigin(CGPoint(x: frame.minX.rounded(), y: frame.minY.rounded()))
+        let selection = mode == .region ? selector.selection?.offsetBy(dx: -origin.x, dy: -origin.y) : nil
+        toolbar.setFrameOrigin(ToolbarPlacement.origin(size: toolbar.frame.size, selection: selection, in: view.bounds))
     }
 
     /// 按 C：把放大镜中心像素的颜色值（sRGB 十六进制）复制到剪贴板

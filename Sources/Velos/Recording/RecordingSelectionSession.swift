@@ -34,8 +34,8 @@ final class RecordingSelectionSession: OverlayEventHandler {
 
     private(set) var isFinished = false
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
-    private var previousApp: NSRunningApplication?
-    private var isWatchingDeactivation = false
+    /// 开始前正在使用的 App、切到前台、被抢走前台时取消（开始时创建）
+    private var frontmost: FrontmostAppGuard?
 
     init(hotkey: Hotkey) {
         self.hotkey = hotkey
@@ -46,8 +46,7 @@ final class RecordingSelectionSession: OverlayEventHandler {
     // MARK: - 开始与结束
 
     func start() {
-        let frontmost = NSWorkspace.shared.frontmostApplication
-        previousApp = frontmost == .current ? nil : frontmost
+        frontmost = FrontmostAppGuard()
         mousePoint = NSEvent.mouseLocation
         activeDisplayID = NSScreen.underMouse?.displayID ?? 0
         observe(NSApplication.didChangeScreenParametersNotification) { $0.cancel() }
@@ -95,6 +94,7 @@ final class RecordingSelectionSession: OverlayEventHandler {
         isFinished = true
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
+        frontmost?.stopWatching()
         hint.remove()
         optionsBar.removeFromSuperview()
         for window in overlays.values {
@@ -106,31 +106,21 @@ final class RecordingSelectionSession: OverlayEventHandler {
         overlays.removeAll()
         NSCursor.arrow.set()
         HotkeyManager.shared.resume(.recording)
-        restorePreviousApp()
+        frontmost?.restorePreviousApp()
         onFinish?()
     }
 
     // MARK: - 前台切换（与截图相同：前台 App 才能显示十字准星，结束后把焦点还回去）
 
-    private var isFrontmost: Bool { NSWorkspace.shared.frontmostApplication == .current }
-
     private func activateForCursor() {
-        let center = NSWorkspace.shared.notificationCenter
-        let token = center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
-            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated {
-                guard let self, !self.isFinished, !self.isHandingOff, let app else { return }
-                if app == .current {
-                    self.isWatchingDeactivation = true
-                    self.overlayCursor(at: self.mousePoint).set()
-                } else if self.isWatchingDeactivation {
-                    Log.capture.notice("其他 App 切到前台，取消录屏选区")
-                    self.cancel()
-                }
-            }
-        }
-        observers.append((center, token))
-        NSApp.activate()
+        frontmost?.activate(onActivated: { [weak self] in
+            guard let self, !self.isFinished, !self.isHandingOff else { return }
+            self.overlayCursor(at: self.mousePoint).set()
+        }, onLost: { [weak self] _ in
+            guard let self, !self.isFinished, !self.isHandingOff else { return }
+            Log.capture.notice("其他 App 切到前台，取消录屏选区")
+            self.cancel()
+        })
     }
 
     private func observe(_ name: Notification.Name, _ action: @escaping (RecordingSelectionSession) -> Void) {
@@ -141,12 +131,6 @@ final class RecordingSelectionSession: OverlayEventHandler {
             }
         }
         observers.append((NotificationCenter.default, token))
-    }
-
-    private func restorePreviousApp() {
-        guard isFrontmost, let previousApp, !previousApp.isTerminated else { return }
-        NSApp.yieldActivation(to: previousApp)
-        previousApp.activate(from: .current, options: [])
     }
 
     // MARK: - 模式切换与确认
