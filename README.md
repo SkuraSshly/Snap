@@ -70,7 +70,8 @@ open build/Velos.app
 
 | 命令 | 作用 |
 |---|---|
-| `./build.sh debug` | 调试版，内含自测（`VELOS_UITEST`、`VELOS_RECTEST`、`VELOS_FEATURETEST`、`VELOS_AUTOSCROLL_E2E` 等环境变量） |
+| `./test.sh` | 单元测试（拼接、GIF 编码、快捷键、翻译引擎签名、文字识别等纯逻辑），几秒完成，不启动 App |
+| `./build.sh debug` | 调试版，内含界面流程自测（`VELOS_UITEST`、`VELOS_RECTEST`、`VELOS_FEATURETEST` 等环境变量） |
 | `./run.sh` | 编译并重新启动 |
 | `./package.sh` | 打包成 `dist/Velos-版本号.dmg` 和 `.zip` |
 

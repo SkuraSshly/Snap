@@ -25,6 +25,14 @@ let package = Package(
             dependencies: ["VelosOCRKit"],
             path: "Sources/VelosOCRService"
         ),
+        // 纯逻辑的单元测试（swift test）：拼接、GIF 编码、快捷键、翻译引擎签名、语言规则、标注几何、文字识别排版。
+        // 用工具链自带的 Swift Testing，不需要 Xcode；不启动 App、不碰屏幕。
+        // 界面流程的自测在 App 里（调试版 + 环境变量，见 README「开发」）
+        .testTarget(
+            name: "VelosTests",
+            dependencies: ["Velos", "VelosOCRKit"],
+            path: "Tests/VelosTests"
+        ),
     ],
     // 使用 Swift 5 语言模式：AppKit / AVFoundation 回调较多，Swift 6 严格并发检查会带来大量样板代码
     swiftLanguageModes: [.v5]

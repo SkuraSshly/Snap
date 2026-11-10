@@ -1,0 +1,124 @@
+import CoreGraphics
+import Foundation
+import Testing
+@testable import Velos
+
+/// 长截图拼接的行为基线：用合成的「页面」（每一行像素都不一样）切出一帧帧画面喂给拼接器，
+/// 检查每一步报告的事件和最终拼出来的图（逐行和页面比对）
+@Suite struct ScrollStitcherTests {
+    static let width = 64
+
+    /// 页面的第 row 行：每 6 个像素换一种颜色，颜色由行号和列号算出（相邻行、不同行都不一样，也不是纯色）
+    static func pageRow(_ row: Int, seed: Int = 0) -> [UInt32] {
+        (0..<width).map { x in
+            var h = UInt32(truncatingIfNeeded: (row &* 2654435761) ^ ((x / 6 + seed * 97) &* 40503))
+            h ^= h >> 15
+            return 0xFF00_0000 | (h & 0x00FF_FFFF)
+        }
+    }
+
+    /// 由若干行组成一帧（BGRA、不透明）
+    static func frame(_ rows: [[UInt32]]) -> PixelFrame {
+        var data = Data(capacity: rows.count * width * 4)
+        for row in rows {
+            row.withUnsafeBytes { data.append(contentsOf: $0) }
+        }
+        return PixelFrame(width: width, height: rows.count, bytesPerRow: width * 4, data: data,
+                          colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+    }
+
+    /// 页面从 offset 行开始、可见 height 行的画面；上面可以有固定的 header 行，下面有固定的 footer 行
+    static func window(offset: Int, height: Int, header: Int = 0, footer: Int = 0) -> PixelFrame {
+        let top = (0..<header).map { pageRow($0, seed: 1) }
+        let body = (offset..<(offset + height)).map { pageRow($0) }
+        let bottom = (0..<footer).map { pageRow($0, seed: 2) }
+        return frame(top + body + bottom)
+    }
+
+    /// 拼好的图读回成行（和合成时一样的格式）
+    static func rows(of image: CGImage) -> [[UInt32]] {
+        guard let frame = PixelFrame(image: image) else { return [] }
+        return frame.data.withUnsafeBytes { raw in
+            (0..<frame.height).map { y in
+                (0..<frame.width).map { x in raw.load(fromByteOffset: y * frame.bytesPerRow + x * 4, as: UInt32.self) }
+            }
+        }
+    }
+
+    @Test func 第一帧报告开始长度是一屏() {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        #expect(stitcher.add(Self.window(offset: 0, height: 100)) == .started)
+        #expect(stitcher.length == 100)
+    }
+
+    @Test func 一路往下滚每一步都接上滚过的行数() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        stitcher.add(Self.window(offset: 0, height: 100))
+        for step in 1...15 {
+            #expect(stitcher.add(Self.window(offset: step * 7, height: 100)) == .appended(7))
+        }
+        #expect(stitcher.length == 100 + 15 * 7)
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<(100 + 15 * 7)).map { Self.pageRow($0) }
+        #expect(Self.rows(of: image) == expected)
+    }
+
+    @Test func 画面没变报告未变化() {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        stitcher.add(Self.window(offset: 0, height: 100))
+        stitcher.add(Self.window(offset: 20, height: 100))
+        #expect(stitcher.add(Self.window(offset: 20, height: 100)) == .unchanged)
+    }
+
+    @Test func 往回滚报告移动而不拼接() {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        stitcher.add(Self.window(offset: 0, height: 100))
+        stitcher.add(Self.window(offset: 40, height: 100))
+        let before = stitcher.length
+        #expect(stitcher.add(Self.window(offset: 25, height: 100)) == .moved)
+        #expect(stitcher.length == before)
+    }
+
+    @Test func 一下滚过整屏对不上() {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        stitcher.add(Self.window(offset: 0, height: 100))
+        stitcher.add(Self.window(offset: 10, height: 100))
+        #expect(stitcher.add(Self.window(offset: 400, height: 100)) == .lost)
+    }
+
+    @Test func 顶部和底部固定的部分只出现一次() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let header = 20, footer = 12, visible = 70
+        stitcher.add(Self.window(offset: 0, height: visible, header: header, footer: footer))
+        for step in 1...10 {
+            stitcher.add(Self.window(offset: step * 9, height: visible, header: header, footer: footer))
+        }
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<header).map { Self.pageRow($0, seed: 1) }
+            + (0..<(visible + 90)).map { Self.pageRow($0) }
+            + (0..<footer).map { Self.pageRow($0, seed: 2) }
+        #expect(stitcher.length == expected.count)
+        #expect(Self.rows(of: image) == expected)
+    }
+
+    @Test func 到长度上限后不再拼接() {
+        var stitcher = ScrollStitcher(axis: .vertical, maxLength: 130)
+        stitcher.add(Self.window(offset: 0, height: 100))
+        var events: [ScrollStitcher.Event] = []
+        for step in 1...10 { events.append(stitcher.add(Self.window(offset: step * 10, height: 100))) }
+        #expect(events.contains(.limitReached))
+        #expect(stitcher.length <= 130)
+    }
+
+    /// 选区里大部分区域不动、只有中间一条在滚（框了整个窗口，只有对话栏在滚）：真实的滚动不能被当成「没变」
+    @Test func 大部分区域不动时仍能认出滚动() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let header = 120, footer = 120, visible = 60
+        stitcher.add(Self.window(offset: 0, height: visible, header: header, footer: footer))
+        for step in 1...8 {
+            #expect(stitcher.add(Self.window(offset: step * 5, height: visible, header: header, footer: footer)) == .appended(5))
+        }
+        let image = try #require(stitcher.makeImage())
+        #expect(Self.rows(of: image).count == header + visible + 40 + footer)
+    }
+}
