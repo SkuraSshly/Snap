@@ -27,8 +27,6 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
     private var isClosed = false
     private var hud: RecognitionHUD?
 
-    /// 复制用的剪贴板（自测时换成私有剪贴板）
-    nonisolated(unsafe) static var pasteboard = NSPasteboard.general
 
     var text: String { model.sourceText }
     var frame: CGRect { window.frame }
@@ -172,7 +170,7 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
 
     private func copy(_ text: String, hint: String) {
         guard !text.isEmpty else { return }
-        let pasteboard = Self.pasteboard
+        let pasteboard = Clipboard.target
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         hud?.close()

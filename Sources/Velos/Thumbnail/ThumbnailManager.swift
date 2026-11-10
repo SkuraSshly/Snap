@@ -38,8 +38,6 @@ final class ThumbnailManager {
 
     private var entries: [Entry] = []
     private var screen: NSScreen?
-    /// 「拷贝文件」用的剪贴板（自测时换成私有剪贴板，不动用户的剪贴板）
-    var pasteboard = NSPasteboard.general
 
     private init() {}
 
@@ -204,11 +202,11 @@ final class ThumbnailManager {
             NSWorkspace.shared.activateFileViewerSelecting([url])
             self?.dismiss(entry)
         }
-        view.onCopy = { [weak self, weak entry] in
+        view.onCopy = { [weak entry] in
             // 拷贝文件本身：可以直接粘贴到访达、聊天、邮件里
-            guard let self, let entry else { return }
-            pasteboard.clearContents()
-            pasteboard.writeObjects([url as NSURL])
+            guard let entry else { return }
+            Clipboard.target.clearContents()
+            Clipboard.target.writeObjects([url as NSURL])
             entry.view.showCopied()
         }
         view.onDelete = { [weak self, weak entry] in

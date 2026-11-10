@@ -51,9 +51,6 @@ final class ColorPickerView: NSView, NSTextFieldDelegate {
     var onChange: ((NSColor, CGFloat?) -> Void)?
     var onClose: (() -> Void)?
 
-    /// 读取颜色代码的剪贴板（自测时换成私有剪贴板）
-    nonisolated(unsafe) static var pasteboard = NSPasteboard.general
-
     private let panel: FrostedPanel
     private let catcher = DismissCatcher()
     private let square = SaturationBrightnessView()
@@ -184,7 +181,7 @@ final class ColorPickerView: NSView, NSTextFieldDelegate {
     }
 
     static func clipboardColor() -> (color: NSColor, opacity: CGFloat?)? {
-        guard let text = pasteboard.string(forType: .string), text.count <= 40 else { return nil }
+        guard let text = Clipboard.target.string(forType: .string), text.count <= 40 else { return nil }
         return ColorCode.parse(text)
     }
 

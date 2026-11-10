@@ -399,10 +399,10 @@ enum DebugUITest {
         // 自测机器上没有下载 Apple 翻译的语言包，也不能弹出下载提示：用假的翻译，检查结果窗口的其余部分
         TranslationModel.debugTranslator = { text, source, target in "[\(source.rawValue)→\(target.rawValue)] \(text)" }
         let testPasteboard = NSPasteboard(name: NSPasteboard.Name("local.velos.uitest.translate"))
-        TranslationWindow.pasteboard = testPasteboard
+        Clipboard.target = testPasteboard
         defer {
             TranslationModel.debugTranslator = nil
-            TranslationWindow.pasteboard = .general
+            Clipboard.target = .general
             testPasteboard.releaseGlobally()
         }
         defer { drawsText = false }
@@ -818,17 +818,17 @@ enum DebugUITest {
         prefs.defaultTargetLanguage = ""
         check("默认目标语言：自动时英文译成简体中文", english.targetLanguage == .simplifiedChinese)
         prefs.translateAutoCopy = true
-        TranslationWindow.pasteboard.clearContents()
+        Clipboard.target.clearContents()
         english.translate()
         try? await Task.sleep(for: .milliseconds(300))
-        check("翻译完成后自动复制译文", TranslationWindow.pasteboard.string(forType: .string) == english.translation
-              && !english.translation.isEmpty, String(describing: TranslationWindow.pasteboard.string(forType: .string)))
+        check("翻译完成后自动复制译文", Clipboard.target.string(forType: .string) == english.translation
+              && !english.translation.isEmpty, String(describing: Clipboard.target.string(forType: .string)))
         prefs.translateAutoCopy = false
-        TranslationWindow.pasteboard.clearContents()
+        Clipboard.target.clearContents()
         english.sourceText = "Good night"
         english.translate()
         try? await Task.sleep(for: .milliseconds(300))
-        check("关闭自动复制时不复制", TranslationWindow.pasteboard.string(forType: .string) == nil)
+        check("关闭自动复制时不复制", Clipboard.target.string(forType: .string) == nil)
         prefs.defaultTargetLanguage = savedTarget
         prefs.translateAutoCopy = savedAutoCopy
 
@@ -1471,7 +1471,7 @@ enum DebugUITest {
         let testPasteboard = NSPasteboard(name: NSPasteboard.Name("local.velos.uitest.colors"))
         testPasteboard.clearContents()
         testPasteboard.setString("#33AA77", forType: .string)
-        ColorPickerView.pasteboard = testPasteboard
+        Clipboard.target = testPasteboard
         toolbar.debugToggleColorPicker()
         check("打开任意颜色调色盘", toolbar.isShowingColorPicker && session.overlayCursor(at: g(150, 135)) == .arrow)
         check("剪贴板里有颜色代码：显示「使用剪贴板颜色」", toolbar.colorPicker?.debugClipboardButton != nil)
@@ -1508,7 +1508,7 @@ enum DebugUITest {
               && ColorCode.parse("rgba(255, 0, 0, 0.25)")?.opacity == 0.25
               && ColorCode.parse("12AB3") == nil && ColorCode.parse("rgb(300, 0, 0)") == nil)
         testPasteboard.releaseGlobally()
-        ColorPickerView.pasteboard = .general
+        Clipboard.target = .general
         // 撤销颜色修改（剪贴板颜色、输入代码、调色盘在 1 秒内连续修改，合并成一次撤销）
         _ = session.overlayKeyDown(key(kVK_ANSI_Z, false, "z").withCommand)
         let restored = document.annotation(withID: firstID)
@@ -2040,7 +2040,7 @@ enum DebugRecordingTest {
             Preferences.shared.recordSystemAudio = systemAudioBefore
         }
         let pasteboard = NSPasteboard(name: .init("local.velos.selftest"))
-        ThumbnailManager.shared.pasteboard = pasteboard
+        Clipboard.target = pasteboard
 
         // 7. Enter 开始录制 → 控制条 + 红框
         let region = CGRect(x: o.x + 100, y: o.y + 100, width: 200, height: 150)
@@ -2186,7 +2186,7 @@ enum DebugRecordingTest {
         }
         thumbnails.debugDismissAll()
         await snapshotRecordingThumbnail(scale: scale)
-        thumbnails.pasteboard = .general
+        Clipboard.target = .general
         pasteboard.clearContents()
         try? FileManager.default.removeItem(at: url)
         check("自测录屏文件已删除", !FileManager.default.fileExists(atPath: url.path))

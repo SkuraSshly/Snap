@@ -322,7 +322,7 @@ final class TranslationModel: ObservableObject {
     /// 翻译完成：设置里打开了「自动复制译文」就复制
     private func didFinishTranslation() {
         guard !isPartial, !translation.isEmpty, Preferences.shared.translateAutoCopy else { return }
-        let pasteboard = TranslationWindow.pasteboard
+        let pasteboard = Clipboard.target
         pasteboard.clearContents()
         pasteboard.setString(translation, forType: .string)
     }

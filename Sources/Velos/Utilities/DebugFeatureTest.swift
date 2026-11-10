@@ -24,7 +24,7 @@ enum DebugFeatureTest {
             let saved = (prefs.recordingCountdown, prefs.highlightClicks, prefs.recordingShowThumbnail, prefs.recordingShowsCursor,
                          prefs.recordSystemAudio, prefs.recordMicrophone, prefs.showMenuBarIcon, prefs.screenshotHotkey,
                          prefs.recordingHotkey, prefs.gifFrameRate, prefs.gifMaxWidth)
-            ThumbnailManager.shared.pasteboard = NSPasteboard(name: .init("local.velos.selftest"))
+            Clipboard.target = NSPasteboard(name: .init("local.velos.selftest"))
             prefs.recordSystemAudio = false
             prefs.recordMicrophone = false
 
@@ -45,7 +45,7 @@ enum DebugFeatureTest {
             _ = CaptureCoordinator.shared.setHotkey(saved.7, for: .screenshot)
             _ = CaptureCoordinator.shared.setHotkey(saved.8, for: .recording)
             (prefs.gifFrameRate, prefs.gifMaxWidth) = (saved.9, saved.10)
-            ThumbnailManager.shared.pasteboard = .general
+            Clipboard.target = .general
             check("测试修改的设置已全部恢复", prefs.screenshotHotkey == saved.7 && prefs.recordingHotkey == saved.8
                   && prefs.showMenuBarIcon == saved.6 && prefs.recordingCountdown == saved.0)
 
