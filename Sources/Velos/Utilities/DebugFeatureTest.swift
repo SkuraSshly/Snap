@@ -87,7 +87,7 @@ enum DebugFeatureTest {
         // 输入框里的 ⌘A / ⌘C / ⌘V / ⌘X / ⌘Z：靠隐藏的「编辑」菜单分发
         let menuKeys = Set(NSApp.mainMenu?.items.flatMap { $0.submenu?.items ?? [] }
             .filter { $0.keyEquivalentModifierMask == .command }.map(\.keyEquivalent) ?? [])
-        check("主菜单里有剪切、拷贝、粘贴、全选、撤销、退出的快捷键", ["x", "c", "v", "a", "z", "q"].allSatisfy(menuKeys.contains), "\(menuKeys)")
+        check("主菜单里有剪切、拷贝、粘贴、全选、撤销、退出、关闭窗口、最小化的快捷键", ["x", "c", "v", "a", "z", "q", "w", "m"].allSatisfy(menuKeys.contains), "\(menuKeys)")
         // 设置窗口可以拖边缘调大小、用绿色按钮缩放，最小是默认大小
         let minimum = SettingsWindowController.debugCurrent?.windowWillResize(window, to: NSSize(width: 100, height: 100)) ?? .zero
         check("设置窗口可以调整大小、缩放", window.styleMask.contains(.resizable)

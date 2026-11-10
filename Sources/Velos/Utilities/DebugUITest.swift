@@ -246,6 +246,22 @@ enum DebugUITest {
         if let editor = ThumbnailManager.shared.debugOpenNewest() {
             try? await Task.sleep(for: .milliseconds(300))
             check("单击缩略图打开编辑窗口", editor.debugWindow.isVisible && ThumbnailManager.shared.visibleCount == 0)
+            // 编辑窗口可以拖边缘调整大小、用绿色按钮缩放；调大后图片区域跟着变大，工具栏仍然居中，再恢复原样
+            do {
+                let window = editor.debugWindow
+                let scroll = window.contentView?.subviews.first { $0 is NSScrollView }
+                let toolbar = window.contentView?.subviews.first { $0 is AnnotationToolbar }
+                let before = window.frame, scrollBefore = scroll?.frame.size ?? .zero
+                window.setFrame(before.insetBy(dx: -50, dy: -40), display: true)
+                let grown = scroll?.frame.size ?? .zero
+                let centered = toolbar.map { abs($0.frame.midX - (window.contentView?.bounds.midX ?? 0)) <= 1 } ?? false
+                window.setFrame(before, display: true)
+                check("编辑窗口可以调整大小、缩放，图片区域跟着变、工具栏保持居中",
+                      window.styleMask.contains(.resizable) && window.standardWindowButton(.zoomButton)?.isEnabled == true
+                      && grown.width == scrollBefore.width + 100 && grown.height == scrollBefore.height + 80 && centered
+                      && window.contentMinSize.width > 0,
+                      "调大后 \(grown)，原来 \(scrollBefore)，居中 \(centered)")
+            }
             check("编辑窗口默认选中矩形工具", editor.debugAnnotator.tool == .rectangle)
             editor.canvasMouseDown(at: CGPoint(x: 150, y: 30))
             editor.canvasMouseDragged(to: CGPoint(x: 190, y: 60))

@@ -51,6 +51,8 @@ final class VideoPreviewWindowController: NSWindowController, NSWindowDelegate {
         window.identifier = .velosCapturable
         window.isReleasedWhenClosed = false
         window.contentAspectRatio = size
+        // 最小宽度 320（按视频比例），免得拖得太小、播放控件挤坏
+        window.contentMinSize = CGSize(width: 320, height: (320 * size.height / size.width).rounded())
         window.centerOnScreen()
 
         playerView.player = AVPlayer(url: url)

@@ -83,7 +83,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
                                   minMagnification: fitAll / zoom, maxMagnification: max(1, 4 * pixelRatio / zoom))
         let contentSize = CGSize(width: max(viewSize.width, 560), height: viewSize.height + toolbarArea)
         window = EditorWindow(contentRect: CGRect(origin: .zero, size: contentSize),
-                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
 
         window.title = "编辑截图"
@@ -97,6 +97,8 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         let content = NSView(frame: CGRect(origin: .zero, size: contentSize))
         zoomView.setFrameOrigin(CGPoint(x: ((contentSize.width - viewSize.width) / 2).rounded(),
                                         y: toolbarArea))
+        // 窗口可以拖边缘调整大小、用绿色按钮缩放：图片区域跟着窗口变大变小（工具栏在 windowDidResize 里重新居中）
+        zoomView.autoresizingMask = [.width, .height]
         content.addSubview(zoomView)
         zoomView.onZoom = { [weak self] in self?.zoomChanged() }
         zoomLabel.font = roundedFont(ofSize: 13, weight: .semibold, monospacedDigits: true)
@@ -140,6 +142,9 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
             zoomView.setFrameOrigin(CGPoint(x: ((windowSize.width - viewSize.width) / 2).rounded(), y: toolbarArea))
         }
         window.setFrame(window.frameRect(forContentRect: CGRect(origin: .zero, size: windowSize)), display: false)
+        // 最小：工具栏放得下、图片区域还剩一小块（不超过打开时的大小）
+        window.contentMinSize = CGSize(width: min(windowSize.width, (toolbar.frame.width + Self.padding * 2).rounded()),
+                                       height: min(windowSize.height, toolbarArea + 180))
         updateToolbar()
         window.centerOnScreen()
     }
@@ -299,6 +304,10 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         if let cursor = annotator.resizeCursor(at: point) { return cursor }
         if annotator.isMovingAnnotation || annotator.grabbableAnnotation(at: point) != nil { return .snapMove }
         return canvasCursor
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        updateToolbar()
     }
 
     func windowWillClose(_ notification: Notification) {
