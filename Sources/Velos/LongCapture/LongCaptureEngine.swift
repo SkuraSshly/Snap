@@ -82,8 +82,9 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         // 不指定色彩空间：按屏幕自己的色彩空间截，不做转换。
         // 转换（例如内建屏的色彩描述 → Display P3）会加一点抖动，三分之一的像素前后两帧差 1~2 级，
         // 滚动前后的画面就不再逐像素一致，只能用慢得多的容差比对，快速滚动时跟不上
-        // 截得越快，相邻两帧之间页面移动得越少，快速滚动也接得上（拼接一帧只要几毫秒，跟得上）
-        let fps = Int32(min(120, max(30, screen.maximumFramesPerSecond)))
+        // 最多每秒 60 帧：手动滚动有限速（按每秒 30 帧设计），60 帧足够接上。
+        // 不跟着屏幕刷新率走：240Hz 的高刷屏每秒送来 240 帧，每帧都要拼接、更新长度和预览，主线程会被塞满
+        let fps = Int32(min(60, max(30, screen.maximumFramesPerSecond)))
         config.minimumFrameInterval = CMTime(value: 1, timescale: fps)
         config.queueDepth = 5
         self.scale = scale
@@ -127,14 +128,6 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
             }
             // 往上滚（正数）= 页面内容往下移 = 拼接方向的负数
             hint = hint.map { $0 - Double(points * scale) }
-        }
-    }
-
-    /// 等已经送来的帧全部拼完（自动滚动判断「这一步滚完了没有」前调用：拼接慢时结果会晚到）
-    /// 返回此刻拼好的长度（像素）：比等主线程收到更新更准
-    func flush() async -> Int {
-        await withCheckedContinuation { continuation in
-            queue.async { [self] in continuation.resume(returning: stitcher.length) }
         }
     }
 

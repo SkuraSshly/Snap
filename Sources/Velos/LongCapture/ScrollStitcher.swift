@@ -407,7 +407,10 @@ struct ScrollStitcher {
         where count >= 3 {
             if verify(previous, current, shift: d) { return d }
         }
-        return mostlySame(previous, current) ? 0 : nil
+        // 精确匹配找不到：交给容差比对（它会先排除原位置不动的行再找）。
+        // 不能在这里因为「大部分行没变」就判成没滚动——选区里不动的部分占大头时（框了整个屏幕、只有中间一栏在滚），
+        // 在 Retina 屏上像素有细微差别、精确匹配失败，会把真实的滚动当成「没变」
+        return nil
     }
 
     /// 容差比对：像素不完全一致时（例如 Retina 屏上截取时的颜色转换让三分之一的像素差 1~2 级），找最像的滚动距离。
@@ -456,9 +459,10 @@ struct ScrollStitcher {
                     }
                     return count == 0 ? 0 : Float(total) / Float(count * 3)
                 }
-                // 原位置几乎没变：整体都只是细微差别 → 没有滚动
-                let still = usable.reduce(Float(0)) { $0 + pixelDistance($1, $1) } / Float(usable.count)
-                if still <= 1.2 { return 0 }
+                // 原位置几乎没变 → 没有滚动。按「真正变了的行有多少」判断，不按平均差别：
+                // 选区里不动的部分占大头时（框了整个屏幕、只有中间一栏在滚），平均下来差别很小，会把真实的滚动当成没变
+                let changedRows = usable.filter { pixelDistance($0, $0) > 1.2 }.count
+                if changedRows < max(3, usable.count / 50) { return 0 }
                 let fixed = (0..<n).map { current.lines[$0].flat || pixelDistance($0, $0) <= 1.2 }
 
                 let cur = current.profiles, prev = previous.profiles
@@ -535,9 +539,12 @@ struct ScrollStitcher {
     }
 
     /// 大部分行和上一帧原位置相同（没有滚动，只是局部变化）
+    /// 认不出移动了多少时：是画面没变（只有光标闪烁之类的一两行变化），还是对不上了。
+    /// 按变了的行有多少判断，不按没变的行占比：选区里不动的部分占大头时，没变的行永远过半，会把对不上当成没变，
+    /// 页面一直在滚、拼接却原地踏步
     private static func mostlySame(_ previous: [Line], _ current: [Line]) -> Bool {
-        let same = zip(previous, current).filter { $0 == $1 }.count
-        return Double(same) >= Double(current.count) * 0.5
+        let differing = zip(previous, current).filter { $0 != $1 && !$1.flat }.count
+        return differing < max(4, current.count / 20)
     }
 
     /// 末尾固定部分的长度：从末尾往前，原位置不变的那一段里，最靠前的一行「确定是固定的」

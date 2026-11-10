@@ -62,13 +62,9 @@ struct ScreenshotSettingsView: View {
                 }
                 .disabled(!prefs.longCaptureThrottle)
                 .opacity(prefs.longCaptureThrottle ? 1 : 0.5)
-                SettingsRow(icon: "arrow.down.to.line", tint: .chipCocoa, title: "自动滚动速度") {
-                    WarmSegmented(options: ScrollSpeed.allCases.map { ($0, $0.title) }, selection: $prefs.longCaptureAutoSpeed,
-                                  segmentWidth: 52)
-                }
                 if !permissions.accessibilityGranted {
                     SettingsRow(icon: "hand.raised.fill", tint: .chipHoney, title: "需要「辅助功能」权限",
-                                caption: "滚动限速和自动滚动都需要；没有权限时长截图照常可用，只是要慢慢滚") {
+                                caption: "滚动限速需要；没有权限时长截图照常可用，只是要慢慢滚") {
                         Button("去允许") { permissions.requestAccessibility() }
                             .buttonStyle(WarmButtonStyle())
                     }

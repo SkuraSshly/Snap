@@ -32,7 +32,7 @@ struct GeneralSettingsView: View {
                     StatusBadge(ok: permissions.microphoneGranted, text: permissions.microphoneGranted ? "已授权" : "未授权")
                 }
                 SettingsRow(icon: "hand.raised.fill", tint: .chipHoney, title: "辅助功能",
-                            caption: "可选，长截图的自动滚动、滚动限速需要") {
+                            caption: "可选，长截图的滚动限速需要") {
                     HStack(spacing: 8) {
                         if !permissions.accessibilityGranted {
                             Button("去允许") { permissions.requestAccessibility() }

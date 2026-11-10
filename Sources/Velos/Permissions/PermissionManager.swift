@@ -5,7 +5,7 @@ import CoreGraphics
 /// 统一管理系统权限：
 /// - 屏幕与系统录音（必需）：截图、录屏、录制系统声音都依赖它
 /// - 麦克风（可选）：只有录屏时录麦克风才需要
-/// - 辅助功能（可选）：只有长截图的自动滚动、滚动限速才需要（替别的 App 发送 / 调整滚动事件）
+/// - 辅助功能（可选）：只有长截图的滚动限速才需要（调整发给别的 App 的滚动事件）
 @MainActor
 final class PermissionManager: ObservableObject {
     static let shared = PermissionManager()

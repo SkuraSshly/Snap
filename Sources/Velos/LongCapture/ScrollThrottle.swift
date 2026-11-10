@@ -56,11 +56,11 @@ struct ScrollThrottle {
 }
 
 /// 长截图期间拦截选区里的滚轮事件、按 ScrollThrottle 限速。
-/// 需要「辅助功能」权限（和自动滚动是同一个）；没有权限时创建不了，返回 nil，长截图照常工作，只是不限速。
+/// 需要「辅助功能」权限；没有权限时创建不了，返回 nil，长截图照常工作，只是不限速。
 /// 只改鼠标在选区里时、沿当前方向的滚动量；其他滚动、其他事件原样放过。长截图结束时立即移除。
 @MainActor
 final class LongCaptureScrollTap {
-    /// 正在工作的限速（长截图期间只有一个）：自己补发、自动滚动发的事件要先登记，拦截时放过
+    /// 正在工作的限速（长截图期间只有一个）：自己补发的事件要先登记，拦截时放过
     private(set) static weak var current: LongCaptureScrollTap?
     /// 登记过、马上会经过这里的自己发的滚动量
     private var ownAmounts: [Int64] = []
@@ -133,7 +133,7 @@ final class LongCaptureScrollTap {
             : (.scrollWheelEventPointDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventDeltaAxis2)
         let delta = Double(event.getIntegerValueField(pointField))
         guard delta != 0 else { return Unmanaged.passUnretained(event) }
-        // 自己发的（自动滚动、补发积压）：已经控制过速度，原样放过
+        // 自己发的（补发积压）：已经控制过速度，原样放过
         if let index = ownAmounts.firstIndex(of: Int64(delta)) {
             ownAmounts.remove(at: index)
             return Unmanaged.passUnretained(event)

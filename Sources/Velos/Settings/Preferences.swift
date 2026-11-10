@@ -52,7 +52,7 @@ enum GIFMaxWidth: Int, CaseIterable, Identifiable {
     var title: String { self == .original ? "与视频同宽" : "最宽 \(rawValue) 像素" }
 }
 
-/// 长截图的速度档位：滚动限速、自动滚动都用
+/// 长截图滚动限速的速度档位
 enum ScrollSpeed: String, CaseIterable, Identifiable {
     case slow, normal, fast
     var id: Self { self }
@@ -100,7 +100,7 @@ final class Preferences: ObservableObject {
         case ocrSmartLayout, ocrDetectsQRCodes, ocrPreferredLanguage, translateWindowPinnedByDefault
         case enabledEngines, defaultEngine, llmPrompt
         case defaultTargetLanguage, translateAutoCopy, speechRate
-        case longCaptureThrottle, longCaptureThrottleSpeed, longCaptureAutoSpeed
+        case longCaptureThrottle, longCaptureThrottleSpeed
     }
 
     // MARK: 通用
@@ -144,7 +144,6 @@ final class Preferences: ObservableObject {
     /// 滚动限速：快速滚动时自动放慢（需要辅助功能权限），默认开
     @Published var longCaptureThrottle: Bool { didSet { Self.save(longCaptureThrottle, .longCaptureThrottle) } }
     @Published var longCaptureThrottleSpeed: ScrollSpeed { didSet { Self.save(longCaptureThrottleSpeed.rawValue, .longCaptureThrottleSpeed) } }
-    @Published var longCaptureAutoSpeed: ScrollSpeed { didSet { Self.save(longCaptureAutoSpeed.rawValue, .longCaptureAutoSpeed) } }
 
     // MARK: 截屏翻译
     /// 智能排版（合并段落、处理连字符和中英文空格）；关闭时保留原始换行
@@ -210,7 +209,6 @@ final class Preferences: ObservableObject {
 
         longCaptureThrottle = Self.load(.longCaptureThrottle, true)
         longCaptureThrottleSpeed = Self.loadEnum(.longCaptureThrottleSpeed, ScrollSpeed.normal)
-        longCaptureAutoSpeed = Self.loadEnum(.longCaptureAutoSpeed, ScrollSpeed.normal)
 
         ocrSmartLayout = Self.load(.ocrSmartLayout, true)
         ocrDetectsQRCodes = Self.load(.ocrDetectsQRCodes, false)
