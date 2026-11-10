@@ -7,6 +7,8 @@ import SwiftUI
 
 // MARK: - 配色
 
+/// 设置窗口（SwiftUI）的配色。主色 apricot、coral 取自 WarmPalette（UI/WarmStyle.swift）；
+/// 文字、细线等按设置窗口的底色单独调过，和 WarmPalette 里的同名颜色数值略有不同，改动时两边一起看
 extension Color {
     private static func warm(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

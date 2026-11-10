@@ -7,6 +7,9 @@ import AppKit
 
 // MARK: - 配色
 
+/// AppKit 界面（截图工具栏、控制条、缩略图等浮在屏幕上的磨砂面板）的配色。
+/// 主色 apricot、coral 也是设置窗口（SwiftUI，见 SettingsPane.swift 的 Color 扩展）的来源；
+/// 文字、细线这几种两边分别按各自的底色调过、数值略有不同，改动时两边一起看
 struct WarmPalette {
     let isDark: Bool
 
