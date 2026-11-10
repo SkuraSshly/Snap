@@ -156,8 +156,6 @@ final class RecordingControlBar: NSPanel {
     var debugTimeText: String { timeLabel.stringValue }
     var debugMicrophoneVisible: Bool { !microphoneButton.isHidden }
     func debugClickPause() { pauseButton.action?() }
-    func debugClickMicrophone() { microphoneButton.action?() }
-    func debugClickStop() { stopButton.action?() }
     #endif
 }
 

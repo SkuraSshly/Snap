@@ -92,6 +92,5 @@ final class VideoPreviewWindowController: NSWindowController, NSWindowDelegate {
 
     #if DEBUG
     static var debugOpenCount: Int { openControllers.count }
-    var debugIsPlaying: Bool { (playerView.player?.rate ?? 0) > 0 }
     #endif
 }

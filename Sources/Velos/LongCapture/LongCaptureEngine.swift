@@ -39,8 +39,6 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     #if DEBUG
     /// 自测：这个窗口虽然属于 Velos，也要截进来
     nonisolated(unsafe) static var debugIncludedWindow: CGWindowID?
-    nonisolated(unsafe) static var debugEventLog: [String] = []
-    nonisolated(unsafe) static var debugLostFrames: [PixelFrame] = []
     #endif
 
     /// 最长：沿滚动方向 20000 像素（Retina 屏上约 10000 点），竖向 1600 像素宽时约 128 MB
@@ -148,17 +146,7 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     /// 拼接一帧，把结果送回主线程（在 queue 上调用）
     private func process(_ frame: PixelFrame) {
         let usedHint = hint.map { Int($0.rounded()) }
-        #if DEBUG
-        let began = ContinuousClock.now
-        #endif
         let event = stitcher.add(frame, hint: usedHint)
-        #if DEBUG
-        if Self.debugIncludedWindow != nil {
-            let ms = Int(Double((ContinuousClock.now - began).components.attoseconds) / 1e15)
-            Self.debugEventLog.append("\(event) 长度 \(stitcher.length) \(ms)ms")
-            if event == .started || (event == .lost && Self.debugLostFrames.count < 3) { Self.debugLostFrames.append(frame) }
-        }
-        #endif
         // 对上了：提示从这一帧重新算；对不上时继续累计（拼接还是拿上一次对上的帧比）
         if event != .lost { hint = 0 }
         switch event {

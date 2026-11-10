@@ -189,7 +189,11 @@ final class TranslationWindow: NSObject, NSWindowDelegate {
             MainActor.assumeIsolated { self?.clickedOutside(reason: "点击了其他 App") }
         }) { monitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown], handler: { [weak self] event in
-            MainActor.assumeIsolated { self?.handleLocal(event) ?? event }
+            // 本地事件监听总在主线程回调。handleLocal 只会原样放行或吞掉事件，主线程闭包只回传「放不放行」，
+            // NSEvent 本身不跨越隔离边界（它没有标成 Sendable）
+            nonisolated(unsafe) let event = event
+            let passes = MainActor.assumeIsolated { self?.handleLocal(event) != nil || self == nil }
+            return passes ? event : nil
         }) { monitors.append(local) }
     }
 

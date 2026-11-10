@@ -184,8 +184,9 @@ final class TranslationModel: ObservableObject {
             let started = ContinuousClock.now
             do {
                 // 大模型：译文一边生成一边显示
-                let output = try await current.translate(text, from: source, to: target) { [weak self] partial in
-                    guard let self, text == self.sourceText, source == self.sourceLanguage, target == self.targetLanguage,
+                // 外层任务已经持有 self，这里直接用（不再写 [weak self]：和外层的强引用矛盾，编译器会警告）
+                let output = try await current.translate(text, from: source, to: target) { partial in
+                    guard text == self.sourceText, source == self.sourceLanguage, target == self.targetLanguage,
                           self.status == .translating else { return }
                     self.translation = partial
                     self.isPartial = true

@@ -125,6 +125,5 @@ final class CaptureCoordinator {
     #if DEBUG
     var debugSession: ScreenshotSession? { screenshotSession }
     var debugRecordingSession: RecordingSelectionSession? { recordingSession }
-    var debugLongCaptureSession: LongCaptureSession? { longCaptureSession }
     #endif
 }
