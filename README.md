@@ -42,7 +42,7 @@ Velos（βέλος）在希腊语里是「箭」——像箭一样快、准地�
 
 需要 **macOS 15 或更新**、**Apple 芯片**的 Mac。
 
-1. 在 [Releases](https://github.com/SkuraSshly/Velos/releases/latest) 下载 `Velos-2.1.dmg`，把 Velos 拖进「应用程序」。
+1. 在 [Releases](https://github.com/SkuraSshly/Velos/releases/latest) 下载 `Velos-2.1.1.dmg`，把 Velos 拖进「应用程序」。
 2. 打开 Velos，按引导打开 **屏幕与系统录音** 权限（必需）。麦克风（录自己的声音）和辅助功能（长截图的滚动限速）用到时再开。
 
 > 这个版本没有 Apple 开发者证书签名和公证，第一次打开时 macOS 会拦下。到 **系统设置 › 隐私与安全性**，在页面下方点 **「仍要打开」**，只需一次。
