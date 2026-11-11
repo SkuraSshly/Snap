@@ -90,7 +90,12 @@ enum EngineCrypto {
 
 /// 引擎的 Key 存在钥匙串里（不写进设置文件）。条目：服务 local.velos.Velos.engines，账户「引擎.字段」
 enum EngineKeychain {
+    #if DEBUG
+    /// 调试版用单独的条目：不读正式版存的 Key（签名不同，读的时候系统会弹窗要求允许），自测写入的测试 Key 也不会碰到正式版的
+    static let service = "local.velos.Velos.debug.engines"
+    #else
     static let service = "local.velos.Velos.engines"
+    #endif
 
     static func get(_ account: String) -> String {
         var query = baseQuery(account)

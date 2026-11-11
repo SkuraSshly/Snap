@@ -114,3 +114,55 @@ enum DebugMemoryProbe {
     }
 }
 #endif
+
+#if DEBUG
+/// 用后内存诊断（只编进 debug 版本）：用合成画面截 3 次图（不截真实屏幕、不用系统剪贴板），
+/// 再把设置窗口逐页打开、关闭 4 轮，记录每一步后的内存；最后保留进程，便于用 heap / malloc_history 查看留下的是什么。
+/// 用法：open --env VELOS_MEMORY_SHOT=/输出目录 [--env MallocStackLogging=lite] build/Velos.app
+@MainActor
+enum DebugMemoryShot {
+    static func runIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["VELOS_MEMORY_SHOT"] else { return }
+        let url = URL(fileURLWithPath: path).appendingPathComponent("result.txt")
+        ScreenshotOutput.dryRun = true
+        Task { @MainActor in
+            var lines: [String] = []
+            func note(_ step: String) {
+                lines.append("\(step)：\(DebugUITest.footprintMB()) MB")
+                try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            }
+            try? await Task.sleep(for: .seconds(3))
+            note("启动后空闲")
+            let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+            for round in 1...3 {
+                CaptureCoordinator.shared.beginScreenshot()
+                try? await Task.sleep(for: .milliseconds(600))
+                guard let session = CaptureCoordinator.shared.debugSession else { note("第 \(round) 次：截图没有启动"); break }
+                note("第 \(round) 次：截图界面打开")
+                let point = DebugUITest.debugPointInWindowA
+                session.overlayMouseMoved(to: point)
+                session.overlayMouseDown(at: point)
+                session.overlayMouseUp(at: point)
+                _ = session.overlayKeyDown(enter)
+                try? await Task.sleep(for: .seconds(1))
+                note("第 \(round) 次：完成（缩略图 \(ThumbnailManager.shared.visibleCount) 个）")
+                try? await Task.sleep(for: .seconds(8))
+                note("第 \(round) 次：8 秒后（缩略图 \(ThumbnailManager.shared.visibleCount) 个）")
+            }
+            try? await Task.sleep(for: .seconds(60))
+            note("60 秒后（缩略图 \(ThumbnailManager.shared.visibleCount) 个）")
+            for round in 1...4 {
+                for tab in SettingsTab.allCases {
+                    SettingsWindowController.show(tab)
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                SettingsWindowController.currentWindow?.close()
+                try? await Task.sleep(for: .seconds(10))
+                note("第 \(round) 轮设置窗口：逐页打开后关闭 10 秒")
+            }
+            note("结束（进程保留）")
+        }
+    }
+}
+#endif

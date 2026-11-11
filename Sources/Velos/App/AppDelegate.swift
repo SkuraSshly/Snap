@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         DebugSnapshots.runIfRequested()
         DebugMemoryProbe.runIfRequested()
+        DebugMemoryShot.runIfRequested()
         DebugSnapshots.runSelfTestIfRequested()
         DebugUITest.runIfRequested()
         DebugPermissionRequest.runIfRequested()

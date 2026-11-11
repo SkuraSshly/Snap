@@ -18,6 +18,8 @@ enum DebugUITest {
     private static let windowB = CGRect(x: 500, y: 300, width: 500, height: 300)
     private static let colorB = SRGBColor(red: 0xCC, green: 0x66, blue: 0x33)
     private static var screenOrigin = CGPoint.zero
+    /// 合成画面里窗口 A 中间一点（屏幕坐标），内存诊断用
+    static var debugPointInWindowA: CGPoint { CGPoint(x: screenOrigin.x + 300, y: screenOrigin.y + 300) }
     /// 截屏翻译自测：在窗口 A 露出来的部分写两行字（其余自测用不到文字）
     private static var drawsText = false
     private static let textRect = CGRect(x: 220, y: 440, width: 260, height: 120)
@@ -30,7 +32,7 @@ enum DebugUITest {
     /// 生成合成屏幕：灰色渐变背景、两个纯色「窗口」、一块 1 像素黑白棋盘格（检验放大镜是否锐利）
     static func syntheticScreen(for screen: NSScreen) -> Synthetic? {
         if let showcase = DebugShowcase.syntheticScreen(for: screen) { return showcase }   // README 截图用的演示桌面
-        guard outputDir != nil else { return nil }
+        guard outputDir != nil || ProcessInfo.processInfo.environment["VELOS_MEMORY_SHOT"] != nil else { return nil }
         let scale = screen.backingScaleFactor
         let width = Int(screen.frame.width * scale), height = Int(screen.frame.height * scale)
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
