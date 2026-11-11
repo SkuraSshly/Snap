@@ -75,3 +75,42 @@ enum DebugSnapshots {
     }
 }
 #endif
+
+#if DEBUG
+import VelosOCRKit
+
+/// 内存诊断：只跑「语言检测 → Apple 翻译」这条真实流程（不截屏、不弹窗），每一步之后记下内存占用，跑完不退出，
+/// 方便用 heap / malloc_history 看是谁申请的内存。
+/// 用法：open --env VELOS_MEMORY_PROBE=/输出目录 [--env MallocStackLogging=lite] build/Velos.app
+enum DebugMemoryProbe {
+    static func runIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["VELOS_MEMORY_PROBE"] else { return }
+        let url = URL(fileURLWithPath: path).appendingPathComponent("result.txt")
+        Task { @MainActor in
+            var lines: [String] = []
+            func note(_ step: String) {
+                lines.append("\(step)：\(DebugUITest.footprintMB()) MB")
+                try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            }
+            try? await Task.sleep(for: .seconds(3))
+            note("启动后空闲")
+            let text = "长截图时只框住要滚动的那一块，接得最稳。\n\n这是第二段，用来测试逐段翻译时的内存占用。"
+            let language = LanguageDetector(preferredLanguages: []).detect(text)
+            note("语言检测（\(language?.rawValue ?? "无")）")
+            if #available(macOS 26.0, *) {
+                let status = await AppleTranslator.shared.status(from: .simplifiedChinese, to: .english)
+                note("查询语言包（\(status)）")
+                if status == .installed {
+                    for round in 1...3 {
+                        let output = try? await AppleTranslator.shared.translate(text, from: .simplifiedChinese, to: .english)
+                        note("第 \(round) 次翻译（\(output?.count ?? -1) 字）")
+                    }
+                    try? await Task.sleep(for: .seconds(70))
+                    note("70 秒后（翻译会话已释放）")
+                }
+            }
+            note("结束（进程保留）")
+        }
+    }
+}
+#endif

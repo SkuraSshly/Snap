@@ -67,9 +67,9 @@ enum VelosMark {
                 context.fillPath()
             }
             // 菜单栏里刃加宽一些，小尺寸也看得清；左刃淡一点，和右刃区分开
-            context.setFillColor(NSColor.black.withAlphaComponent(0.7).cgColor)
+            context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.7))   // 用 sRGB（和其他界面同一种色彩空间）：灰度黑要系统另外生成一套颜色转换表，多占约 1.6 MB
             blade([CGPoint(x: 252, y: 760), CGPoint(x: 372, y: 760), CGPoint(x: tip.x + 50, y: tip.y + 14), tip])
-            context.setFillColor(NSColor.black.cgColor)
+            context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1))
             blade([CGPoint(x: 660, y: 806), CGPoint(x: 812, y: 806), CGPoint(x: tip.x + 66, y: tip.y + 4), tip])
             return true
         }
