@@ -33,6 +33,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
+        window.followActiveSpace()
         window.backgroundColor = .clear
         window.isOpaque = false
         window.isReleasedWhenClosed = false
@@ -40,14 +41,13 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     }
 
     private func present(over parent: NSWindow?) {
-        NSApp.activate()
         // 先让窗口按内容定好大小，才能算出居中的位置（SwiftUI 的尺寸要等一轮刷新才报上来，这里直接量）
         if let view = window.contentViewController?.view {
             let size = view.fittingSize
             if size.width > 0, size.height > 0 { window.setContentSize(size) }
         }
         let wasVisible = window.isVisible
-        window.makeKeyAndOrderFront(nil)
+        window.bringToFront()
         // 窗口第一次显示时系统会自己定位置，所以显示之后再摆（同一轮刷新里完成，不会看到窗口跳动）
         if let parent, parent.isVisible {
             window.center(over: parent)

@@ -20,10 +20,7 @@ final class VideoPreviewWindowController: NSWindowController, NSWindowDelegate {
             openControllers.append(controller)
             return controller
         }()
-        // Velos 没有程序坞图标，需要先激活自己，窗口才会出现在其他 App 前面
-        NSApp.activate()
-        controller.window?.makeKeyAndOrderFront(nil)
-        controller.window?.orderFrontRegardless()
+        controller.window?.bringToFront()
         controller.playerView.player?.play()
         return controller
     }

@@ -78,6 +78,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
+        window.followActiveSpace()
         window.backgroundColor = .clear
         window.isOpaque = false
 
@@ -111,8 +112,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func present() {
         applyMinimumSize()
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
+        window.bringToFront()
     }
 
     private func select(_ tab: SettingsTab) {

@@ -157,10 +157,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
     }
 
     private func present() {
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
-        // 系统没同意切到前台时（macOS 的协作式激活），普通窗口会被压在其他 App 后面；强制放到最前
-        window.orderFrontRegardless()
+        window.bringToFront()
     }
 
     private func updateStyle(_ change: (inout AnnotationStyle) -> Void) {
