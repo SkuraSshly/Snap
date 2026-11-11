@@ -48,7 +48,6 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            AboutFooter()
         }
         .onAppear {
             permissions.refresh()
@@ -140,25 +139,5 @@ struct FolderRow: View {
         } else if panel.runModal() == .OK, let url = panel.url {
             path = url.path
         }
-    }
-}
-
-/// 页面底部的落款：App 图标 + 版本 + 一句话
-private struct AboutFooter: View {
-    private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 22, height: 22)
-            Text("Velos \(version) · 安静地待在菜单栏，按下快捷键就来")
-                .font(.system(size: 11, design: .rounded))
-                .foregroundStyle(Color.warmSecondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 2)
     }
 }

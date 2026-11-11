@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// 自己画的图标（系统图标里没有合适的）。都是模板图：颜色由按钮决定（平时暖棕色，选中时白色），和系统图标一致
 enum VelosIcons {
@@ -77,4 +78,93 @@ enum VelosMark {
         image.accessibilityDescription = "Velos"
         return image
     }()
+}
+
+
+/// 设置窗口左上角的字标：「Velos」用 App 图标里 V 的配色（浅杏 → 珊瑚 → 绯红的渐变），
+/// 一道带辉光的扫描线横穿字的中部，周围散着白色和珊瑚色的光点（和 App 图标的光点同一种画法）
+struct VelosWordmark: View {
+    var fontSize: CGFloat = 30
+
+    private static func hex(_ value: UInt32, _ alpha: Double = 1) -> Color {
+        Color(.sRGB, red: Double((value >> 16) & 0xFF) / 255, green: Double((value >> 8) & 0xFF) / 255,
+              blue: Double(value & 0xFF) / 255, opacity: alpha)
+    }
+    private static let fill = LinearGradient(
+        colors: [hex(0xFDB083), hex(0xF88E63), hex(0xF7784F), hex(0xE8544D), hex(0xC93A4E)],
+        startPoint: UnitPoint(x: 0, y: 0), endPoint: UnitPoint(x: 1, y: 1))
+
+    /// 固定种子的光点：位置用 0…1 的比例表示（相对整个字标），每次画出来一样
+    private struct Dot { let x, y, r, alpha: Double; let white: Bool }
+    private static let dots: [Dot] = {
+        var state: UInt64 = 20261109
+        func next() -> Double {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Double((state >> 33) & 0xFFFFFF) / Double(0xFFFFFF)
+        }
+        var dots: [Dot] = []
+        for _ in 0..<9 {   // 沿扫描线
+            dots.append(Dot(x: 0.02 + next() * 0.96, y: 0.55 + (next() - 0.5) * 0.5 * (0.3 + next()),
+                            r: 0.5 + next() * 0.9, alpha: 0.35 + next() * 0.55, white: next() < 0.5))
+        }
+        for i in 0..<8 {   // 从右上角（字尾）往外散开，越远越小越淡
+            let d = 0.02 + Double(i) * 0.014 + next() * 0.03
+            let angle = -0.6 + (next() - 0.5) * 1.3
+            let fade = max(0.15, 1 - d / 0.2)
+            dots.append(Dot(x: 0.93 + cos(angle) * d, y: 0.3 + sin(angle) * d * 2.2,
+                            r: (0.5 + next() * 0.9) * (0.5 + fade), alpha: fade * (0.5 + next() * 0.5), white: next() < 0.6))
+        }
+        return dots
+    }()
+
+    private var word: some View {
+        Text("Velos")
+            .font(.system(size: fontSize, weight: .heavy, design: .rounded))
+            .tracking(0.5)
+            .fixedSize()
+            // 圆体没有斜体字形，用错切往前倾（和图标里前倾的 V 一个方向）
+            .transformEffect(CGAffineTransform(a: 1, b: 0, c: -0.16, d: 1, tx: fontSize * 0.08, ty: 0))
+    }
+
+    var body: some View {
+        word.hidden()
+            .overlay {
+                ZStack {
+                    // 字后面一层同色柔光
+                    word.foregroundStyle(Self.fill).blur(radius: 3).opacity(0.3)
+                    word.foregroundStyle(Self.fill)
+                    // 扫描线：中间亮、两头淡出，再加一层虚光
+                    GeometryReader { geo in
+                        let y = geo.size.height * 0.55
+                        let line = LinearGradient(stops: [.init(color: Self.hex(0xE2673F, 0), location: 0),
+                                                          .init(color: Self.hex(0xE2673F, 0.9), location: 0.35),
+                                                          .init(color: Self.hex(0xFFF4EA), location: 0.6),
+                                                          .init(color: Self.hex(0xE2673F, 0.85), location: 0.8),
+                                                          .init(color: Self.hex(0xE2673F, 0), location: 1)],
+                                                  startPoint: .leading, endPoint: .trailing)
+                        Rectangle().fill(line).frame(height: 4).blur(radius: 2.5).opacity(0.7)
+                            .position(x: geo.size.width / 2, y: y)
+                        Rectangle().fill(line).frame(width: geo.size.width + 16, height: 1.2)
+                            .position(x: geo.size.width / 2, y: y)
+                    }
+                    Canvas { context, size in
+                        for dot in Self.dots {
+                            let center = CGPoint(x: dot.x * size.width, y: dot.y * size.height)
+                            let color = dot.white ? Self.hex(0xFFFFFF, dot.alpha) : Self.hex(0xF58A5E, dot.alpha)
+                            if dot.r > 1.2 {   // 大的几颗带一点虚光
+                                var glow = context
+                                glow.addFilter(.blur(radius: 1.5))
+                                glow.fill(Path(ellipseIn: CGRect(x: center.x - dot.r * 2, y: center.y - dot.r * 2,
+                                                                 width: dot.r * 4, height: dot.r * 4)), with: .color(color.opacity(0.5)))
+                            }
+                            context.fill(Path(ellipseIn: CGRect(x: center.x - dot.r, y: center.y - dot.r, width: dot.r * 2, height: dot.r * 2)),
+                                         with: .color(color))
+                        }
+                    }
+                    .padding(-12)
+                }
+            }
+            .accessibilityElement()
+            .accessibilityLabel("Velos")
+    }
 }

@@ -189,28 +189,16 @@ private struct SettingsSidebar: View {
 
     private let rowHeight: CGFloat = 38
 
-    /// 直接读包里的图标文件（不用 NSApp.applicationIconImage：那个可能是系统缓存的旧图标，重装后不一定刷新）
-    private static let appIcon: NSImage = Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
-        .flatMap { NSImage(contentsOf: $0) } ?? NSApp.applicationIconImage
     private let tabs = SettingsTab.allCases
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // 让出左上角的红绿灯
             Spacer().frame(height: 52)
-            // 图标 + 名字，一行、垂直居中（图标四周自带约 10% 的透明边，所以往左让一点，和下面的栏目图标对齐）
-            HStack(spacing: 7) {
-                Image(nsImage: Self.appIcon)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 40, height: 40)
-                Text("Velos")
-                    .font(.system(size: 19, weight: .semibold, design: .rounded))
-                    .tracking(0.4)
-                    .foregroundStyle(Color.warmInk)
-            }
-            .padding(.leading, 13)
-            .padding(.bottom, 12)
+            // 字标：图标配色的渐变字 + 扫描线 + 光点
+            VelosWordmark(fontSize: 32)
+                .padding(.leading, 22)
+                .padding(.bottom, 12)
 
             let index = CGFloat(tabs.firstIndex(of: selection.tab) ?? 0)
             ZStack(alignment: .topLeading) {
