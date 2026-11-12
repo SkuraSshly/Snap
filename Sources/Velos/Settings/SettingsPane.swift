@@ -19,9 +19,9 @@ extension Color {
     static let apricot = Color(nsColor: WarmPalette.apricot)
     static let coral = Color(nsColor: WarmPalette.coral)
     /// 文字和图标（暖棕 / 奶白）
-    static let warmInk = warm(light: NSColor(srgbRed: 0.33, green: 0.24, blue: 0.18, alpha: 1),
+    static let warmInk = warm(light: WarmPalette.cocoa,
                               dark: NSColor(srgbRed: 0.98, green: 0.92, blue: 0.86, alpha: 1))
-    static let warmSecondary = warm(light: NSColor(srgbRed: 0.33, green: 0.24, blue: 0.18, alpha: 0.58),
+    static let warmSecondary = warm(light: WarmPalette.cocoa.withAlphaComponent(0.58),
                                     dark: NSColor(srgbRed: 0.98, green: 0.92, blue: 0.86, alpha: 0.55))
     /// 卡片底色
     static let warmCard = warm(light: NSColor(srgbRed: 1, green: 0.99, blue: 0.975, alpha: 0.72),

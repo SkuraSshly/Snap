@@ -2,7 +2,8 @@ import AppKit
 
 // MARK: - 预览
 
-/// 拼接结果的实时预览：竖向时按宽度缩放、显示最新的一段；横向时按高度缩放、显示最右边的一段
+/// 拼接结果的实时预览：一张已经缩小好的小图（采集那边每秒最多画 30 次），宽度撑满，
+/// 显示当前滚到的位置往上的那一段——往下滚时是最新拼上的，往回滚时跟着回去
 @MainActor
 final class LongCapturePreview: NSPanel {
     private let panel = FrostedPanel(cornerRadius: 12, blending: .behindWindow, shadowRadius: 8)
@@ -33,49 +34,32 @@ final class LongCapturePreview: NSPanel {
         canvas.frame = panel.bounds.insetBy(dx: 6, dy: 6)
     }
 
-    func show(_ parts: [CGImage], axis: ScrollAxis) {
-        canvas.parts = parts
-        canvas.axis = axis
+    /// 图片区域的大小（像素）：采集那边按这个大小画小图，显示时不用再缩放
+    var imagePixelSize: (width: Int, height: Int) {
+        let scale = screen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        return (Int((canvas.bounds.width * scale).rounded()), Int((canvas.bounds.height * scale).rounded()))
+    }
+
+    func show(_ image: CGImage?) {
+        canvas.image = image
     }
 
     #if DEBUG
-    var debugPartCount: Int { canvas.parts.count }
+    var debugHasImage: Bool { canvas.image != nil }
     #endif
 
     private final class PreviewCanvas: NSView {
-        var parts: [CGImage] = [] { didSet { needsDisplay = true } }
-        var axis: ScrollAxis = .vertical { didSet { needsDisplay = true } }
+        var image: CGImage? { didSet { needsDisplay = true } }
 
         override func draw(_ dirtyRect: NSRect) {
-            guard let ctx = NSGraphicsContext.current?.cgContext, let first = parts.first else { return }
+            guard let ctx = NSGraphicsContext.current?.cgContext, let image else { return }
             ctx.saveGState()
             ctx.addPath(CGPath(roundedRect: bounds, cornerWidth: 7, cornerHeight: 7, transform: nil))
             ctx.clip()
-            ctx.interpolationQuality = .medium
-            switch axis {
-            case .vertical:
-                // 宽度撑满，从上往下排；超出高度时只显示最下面（最新）的部分
-                let k = bounds.width / CGFloat(first.width)
-                let total = parts.reduce(0) { $0 + CGFloat($1.height) * k }
-                var top = bounds.maxY + max(0, total - bounds.height)
-                for part in parts {
-                    let h = CGFloat(part.height) * k
-                    let rect = CGRect(x: bounds.minX, y: top - h, width: bounds.width, height: h)
-                    if rect.maxY >= bounds.minY - 1, rect.minY <= bounds.maxY + 1 { ctx.draw(part, in: rect) }
-                    top -= h
-                }
-            case .horizontal:
-                // 高度撑满，从左往右排；超出宽度时只显示最右边（最新）的部分
-                let k = bounds.height / CGFloat(first.height)
-                let total = parts.reduce(0) { $0 + CGFloat($1.width) * k }
-                var left = bounds.minX - max(0, total - bounds.width)
-                for part in parts {
-                    let w = CGFloat(part.width) * k
-                    let rect = CGRect(x: left, y: bounds.minY, width: w, height: bounds.height)
-                    if rect.maxX >= bounds.minX - 1, rect.minX <= bounds.maxX + 1 { ctx.draw(part, in: rect) }
-                    left += w
-                }
-            }
+            ctx.interpolationQuality = .high
+            // 宽度撑满、按原比例；图比区域矮时贴着上边（长图的开头在上面）
+            let height = bounds.width * CGFloat(image.height) / CGFloat(image.width)
+            ctx.draw(image, in: CGRect(x: bounds.minX, y: bounds.maxY - height, width: bounds.width, height: height))
             ctx.restoreGState()
         }
     }

@@ -33,11 +33,13 @@ final class EditorZoomView: NSScrollView {
             : NSColor(srgbRed: 0.91, green: 0.86, blue: 0.80, alpha: 1)
     }
 
-    /// - Parameter canvas: 图片画布；外面包一层四周留边距的「桌面」，缩小到比窗口还小时居中
-    init(frame: CGRect, canvas: NSView, minMagnification: CGFloat, maxMagnification: CGFloat) {
+    /// - Parameters:
+    ///   - canvas: 图片画布；外面包一层四周留边距的「桌面」，缩小到比窗口还小时居中
+    ///   - image: 原图：投影按它的形状算（透明的圆角处没有投影）
+    init(frame: CGRect, canvas: NSView, image: CGImage, minMagnification: CGFloat, maxMagnification: CGFloat) {
         super.init(frame: frame)
         contentView = CenteringClipView()
-        documentView = EditorDesk(canvas: canvas, margin: AnnotationEditorWindowController.margin)
+        documentView = EditorDesk(canvas: canvas, image: image, margin: AnnotationEditorWindowController.margin)
         drawsBackground = true
         backgroundColor = Self.deskColor
         contentView.drawsBackground = true
@@ -158,7 +160,8 @@ final class EditorCanvasView: NSView {
         super.init(frame: CGRect(origin: .zero, size: displaySize))
         setBoundsSize(imageSize)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        // 不铺底色：切了圆角的截图四角透明，透出下面编辑界面的暖色背景（铺黑色的话四角是黑的）
+        layer?.backgroundColor = nil
         imageLayer.frame = CGRect(origin: .zero, size: imageSize)
         imageLayer.contents = image
         imageLayer.contentsScale = scale
@@ -220,29 +223,33 @@ final class EditorCanvasView: NSView {
     }
 }
 
-/// 编辑窗口的「桌面」：图片画布放在中间，四周留一圈暖色边距，图片带柔和投影和细边，边界一目了然。
+/// 编辑窗口的「桌面」：图片画布放在中间，四周留一圈暖色边距，图片带柔和投影、像浮在上面，边界一目了然。
 /// 边距里点不到画布，所以标注只能从图片里开始画。
 final class EditorDesk: NSView {
     /// 两层投影：大而柔和的环境投影 + 贴近图片的接触投影，图片看起来浮在编辑界面上面
     private let ambientShadow = CALayer()
     private let contactShadow = CALayer()
 
-    init(canvas: NSView, margin: CGFloat) {
+    init(canvas: NSView, image: CGImage, margin: CGFloat) {
         super.init(frame: CGRect(x: 0, y: 0, width: canvas.frame.width + margin * 2, height: canvas.frame.height + margin * 2))
         wantsLayer = true
         layer?.masksToBounds = false
         canvas.setFrameOrigin(CGPoint(x: margin, y: margin))
-        // 投影单独放在图片下面（图片自己要裁剪掉超出边界的标注，不能带投影）
+        // 投影单独放在图片下面（图片自己要裁剪掉超出边界的标注，不能带投影）。
+        // 投影按图片本身的形状算：截的窗口四角是透明的圆角，投影也是同样的圆角；不垫方形的底板——
+        // 垫了的话，透明的圆角处会露出方块的直角和它的投影，四个角看着很别扭
         let shadowColor = NSColor(srgbRed: 0.22, green: 0.13, blue: 0.07, alpha: 1).cgColor
+        let corner = Self.transparentCornerRadius(of: image) * canvas.frame.width / CGFloat(max(1, image.width))
+        let shape = CGPath(roundedRect: CGRect(origin: .zero, size: canvas.frame.size), cornerWidth: corner, cornerHeight: corner,
+                           transform: nil)
         for (shadow, radius, opacity, offset) in [(ambientShadow, CGFloat(22), Float(0.30), CGFloat(-9)),
                                                   (contactShadow, CGFloat(3), Float(0.22), CGFloat(-1))] {
             shadow.frame = canvas.frame
-            shadow.backgroundColor = NSColor.white.cgColor
+            shadow.shadowPath = shape
             shadow.shadowColor = shadowColor
             shadow.shadowOpacity = opacity
             shadow.shadowRadius = radius
             shadow.shadowOffset = CGSize(width: 0, height: offset)
-            shadow.shadowPath = CGPath(rect: CGRect(origin: .zero, size: canvas.frame.size), transform: nil)
             layer?.addSublayer(shadow)
         }
         addSubview(canvas)
@@ -252,6 +259,23 @@ final class EditorDesk: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var isFlipped: Bool { false }
+
+    /// 图片四角透明的圆角有多大（像素）：沿左上角的对角线往里找第一个不透明的像素，
+    /// 圆弧到对角线的距离是半径的 (1 - 1/√2) 倍。四角不透明（普通截图、长截图）时是 0
+    static func transparentCornerRadius(of image: CGImage) -> CGFloat {
+        let size = min(64, image.width, image.height)
+        guard size > 0, image.alphaInfo != .none, image.alphaInfo != .noneSkipLast, image.alphaInfo != .noneSkipFirst,
+              let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0 }
+        // 只画左上角那一小块（CGContext 原点在左下角：把图片的顶部对齐到这块的顶部）
+        ctx.draw(image, in: CGRect(x: 0, y: size - image.height, width: image.width, height: image.height))
+        guard let data = ctx.data?.assumingMemoryBound(to: UInt8.self) else { return 0 }
+        for k in 0..<size where data[k * size * 4 + k * 4 + 3] > 200 {   // 位图的第 0 行是最上面一行
+            return k == 0 ? 0 : CGFloat(k) / (1 - 1 / 2.0.squareRoot())
+        }
+        return 0
+    }
 }
 
 /// 缩小到比窗口还小时，把图片放在中间（系统默认贴在左下角）

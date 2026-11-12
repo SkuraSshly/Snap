@@ -4,9 +4,10 @@ import Carbon.HIToolbox
 /// 长截图：在截图界面框选区域、点工具栏的「长截图」后开始。
 ///
 /// - 截图界面关闭，焦点还给原来的 App；选区外变暗、选区加边框（都不拦截鼠标），你在选区里滚动页面，Velos 边滚边拼接
-/// - 控制条：竖向 / 横向、取消、编辑、钉图、保存、完成；旁边有拼接结果的实时预览
+/// - 控制条：自动滚动、取消、编辑、钉图、保存、完成；旁边有拼接结果的实时预览（跟着滚动的位置走）
 /// - 不碰滚动：不拦截、不限速、不读取滚轮事件，鼠标、触控板和装的任何滚动工具都照常工作；
 ///   拼接只看截到的画面（每秒最多 60 帧），滚得太快跟丢时自动从当前画面接回
+/// - 自动滚动（可选）：点控制条上的按钮，Velos 替你匀速、慢慢地往下滚；要「辅助功能」权限，只在用它时请求
 /// - 完成后和普通截图一样：复制到剪贴板、显示缩略图（可以继续标注、保存、钉图）
 @MainActor
 final class LongCaptureSession {
@@ -15,7 +16,6 @@ final class LongCaptureSession {
     private let region: CGRect
     private let screen: NSScreen
     private let scale: CGFloat
-    private var axis: ScrollAxis = .vertical
     private var engine: LongCaptureEngine
     private let overlay: LongCaptureOverlay
     private let bar = LongCaptureBar()
@@ -24,8 +24,7 @@ final class LongCaptureSession {
     /// 拼好的长度（像素）
     private var length = 0
     private var hasScrolled = false
-    /// 换过几次方向（和采集那边的 generation 对应，旧一轮的结果不要）
-    private var generation = 0
+    private let autoScroll: LongCaptureAutoScroll
 
     /// 长截图期间的 Esc（焦点在被截的 App 里，只能注册成全局快捷键）
     private var escapeKey: UInt32?
@@ -37,12 +36,13 @@ final class LongCaptureSession {
                              width: region.width.rounded(), height: region.height.rounded())
         self.screen = screen
         scale = screen.backingScaleFactor
-        engine = LongCaptureEngine(axis: .vertical)
+        engine = LongCaptureEngine()
         overlay = LongCaptureOverlay(screen: screen, region: region)
+        autoScroll = LongCaptureAutoScroll(region: self.region)
     }
 
     func start() {
-        bar.onAxis = { [weak self] axis in self?.setAxis(axis) }
+        connectControls()
         bar.onCancel = { [weak self] in self?.cancel() }
         bar.onSave = { [weak self] in self?.complete(.save) }
         bar.onDone = { [weak self] in self?.complete(.done) }
@@ -65,6 +65,12 @@ final class LongCaptureSession {
         }
     }
 
+    /// 自动滚动按钮和它的状态变化
+    private func connectControls() {
+        bar.onAutoScroll = { [weak self] in self?.toggleAutoScroll() }
+        autoScroll.onChange = { [weak self] state in self?.autoScrollChanged(state) }
+    }
+
     private func connect(_ engine: LongCaptureEngine) {
         engine.onUpdate = { [weak self] update in self?.handle(update) }
         engine.onError = { [weak self] message in
@@ -74,40 +80,56 @@ final class LongCaptureSession {
 
     /// 开始时唯一的一条提示（之后滚动的过程中都不再出提示，界面保持干净）
     private var hint: String {
-        "请缓慢\(axis == .vertical ? "向下" : "向右")滚动页面，Velos 边滚边拼接"
+        "请缓慢向下滚动页面，或点「自动滚动」"
     }
 
     // MARK: - 拼接进度
 
     private func handle(_ update: LongCaptureEngine.Update) {
-        guard !isFinished, update.generation == generation else { return }
+        guard !isFinished else { return }
         length = update.length
-        if let parts = update.preview { preview.show(parts, axis: axis) }
-        bar.setLength(update.length, axis: axis, scale: scale)
+        if let image = update.preview { preview.show(image) }
+        bar.setLength(update.length)
+        if let motion = update.motion { autoScroll.noteMotion(motion) }
         switch update.event {
         case .appended:
             if !hasScrolled { hasScrolled = true }
-            overlay.message = nil
-        case .lost:
-            break   // 过程中不出提示：往回滚一点就能接上
-        case .moved, .limitReached, .started, .unchanged:
+            if !autoScroll.isActive { overlay.message = nil }
+        case .moved:
             break
+        case .limitReached:
+            if autoScroll.isActive { autoScroll.stop(.limit) }
+        case .lost, .started, .unchanged:
+            break   // 过程中不出提示：往回滚一点就能接上
         }
     }
 
-    // MARK: - 方向
+    // MARK: - 自动滚动
 
-    private func setAxis(_ newAxis: ScrollAxis) {
-        guard newAxis != axis else { return }
-        axis = newAxis
-        engine.reset(axis: newAxis)
-        generation += 1
-        hasScrolled = false
-        length = 0
-        bar.setLength(0, axis: newAxis, scale: scale)
-        preview.show([], axis: newAxis)
-        overlay.message = nil
-        placeChrome()
+    private func toggleAutoScroll() {
+        if autoScroll.isActive {
+            autoScroll.stop()
+        } else {
+            autoScroll.start()
+        }
+    }
+
+    private func autoScrollChanged(_ state: LongCaptureAutoScroll.State) {
+        bar.setAutoScrolling(autoScroll.isActive)
+        switch state {
+        case .running:
+            overlay.message = nil
+        case .paused:
+            overlay.message = "把鼠标移回选区里，自动滚动会接着滚"
+        case .stopped(.noPermission):
+            overlay.message = "自动滚动需要「辅助功能」权限：在 系统设置 › 隐私与安全性 › 辅助功能 里打开 Velos，再点一次「自动滚动」"
+        case .stopped(.reachedEnd):
+            overlay.message = "已经滚到底了"
+        case .stopped(.limit):
+            overlay.message = "长图已到长度上限"
+        case .stopped(.user):
+            overlay.message = nil
+        }
     }
 
     // MARK: - 结束
@@ -155,6 +177,7 @@ final class LongCaptureSession {
     }
 
     private func close() {
+        autoScroll.stop()
         if let escapeKey { HotkeyManager.shared.removeTemporary(escapeKey) }
         escapeKey = nil
         engine.onUpdate = nil
@@ -171,7 +194,7 @@ final class LongCaptureSession {
     // MARK: - 布局
 
     /// 控制条：选区下方右对齐，放不下放上方，再不行放选区里面底部。
-    /// 预览：竖向放选区右边（放不下放左边），横向放选区上方（放不下放下方），都放不下就不显示
+    /// 预览：放选区右边，放不下放左边，都放不下就不显示
     private func placeChrome() {
         let visible = screen.visibleFrame
         let size = bar.barFrame.size
@@ -184,23 +207,14 @@ final class LongCaptureSession {
         bar.place(at: origin)
 
         let gap: CGFloat = 12
-        var frame: CGRect?
-        switch axis {
-        case .vertical:
-            let previewSize = CGSize(width: 150, height: min(max(region.height, 160), 420))
-            let right = CGRect(x: region.maxX + gap, y: region.maxY - previewSize.height, width: previewSize.width, height: previewSize.height)
-            let left = CGRect(x: region.minX - gap - previewSize.width, y: right.minY, width: previewSize.width, height: previewSize.height)
-            frame = [right, left].first { visible.contains($0) }
-        case .horizontal:
-            let previewSize = CGSize(width: min(max(region.width, 200), 420), height: 110)
-            let above = CGRect(x: region.minX, y: region.maxY + gap, width: previewSize.width, height: previewSize.height)
-            let below = CGRect(x: region.minX, y: min(region.minY, bar.barFrame.minY) - gap - previewSize.height,
-                               width: previewSize.width, height: previewSize.height)
-            frame = [above, below].first { visible.contains($0) && !$0.intersects(bar.barFrame) }
-        }
-        if let frame {
+        let previewSize = CGSize(width: 150, height: min(max(region.height, 160), 420))
+        let right = CGRect(x: region.maxX + gap, y: region.maxY - previewSize.height, width: previewSize.width, height: previewSize.height)
+        let left = CGRect(x: region.minX - gap - previewSize.width, y: right.minY, width: previewSize.width, height: previewSize.height)
+        if let frame = [right, left].first(where: { visible.contains($0) }) {
             preview.setFrame(frame, display: true)
             preview.orderFrontRegardless()
+            let size = preview.imagePixelSize
+            engine.setPreviewSize(width: size.width, height: size.height)
         } else {
             preview.orderOut(nil)
         }
@@ -209,7 +223,7 @@ final class LongCaptureSession {
     #if DEBUG
     /// 自测：显示界面但不开始截屏，画面由 debugFeed 提供
     func debugStartWithoutCapture() {
-        bar.onAxis = { [weak self] axis in self?.setAxis(axis) }
+        connectControls()
         bar.onCancel = { [weak self] in self?.cancel() }
         bar.onEdit = { [weak self] in self?.complete(.edit) }
         bar.onPin = { [weak self] in self?.complete(.pin) }
@@ -221,7 +235,6 @@ final class LongCaptureSession {
     }
     func debugFeed(_ frame: PixelFrame) { engine.debugFeed(frame) }
     func debugImage() async -> CGImage? { await engine.makeImage() }
-    func debugSetAxis(_ axis: ScrollAxis) { setAxis(axis) }
     func debugCancel() { cancel() }
     /// 自测：注册 Esc，并返回编号（可以模拟按下）
     func debugInstallEscape() -> UInt32? {
@@ -232,5 +245,6 @@ final class LongCaptureSession {
     var debugOverlay: LongCaptureOverlay { overlay }
     var debugPreview: LongCapturePreview { preview }
     var debugLength: Int { length }
+    var debugAutoScroll: LongCaptureAutoScroll { autoScroll }
     #endif
 }

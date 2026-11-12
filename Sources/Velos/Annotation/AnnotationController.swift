@@ -197,12 +197,9 @@ final class AnnotationController: NSObject, NSTextViewDelegate {
         }
     }
 
-    /// 端点的光标：按端点相对另一端的方向，取最接近的那种调整大小箭头
+    /// 端点的光标：按端点相对另一端的方向，取最接近的那种调整大小箭头（朝外的小三角深、朝里的浅，和选区的控制点一样）
     private static func cursor(pointing p: CGPoint, from other: CGPoint) -> NSCursor {
-        let angle = atan2(p.y - other.y, p.x - other.x)
-        let octant = Int(((angle / (.pi / 4)).rounded() + 8)) % 8
-        let positions: [NSCursor.FrameResizePosition] = [.right, .topRight, .top, .topLeft, .left, .bottomLeft, .bottom, .bottomRight]
-        return NSCursor.frameResize(position: positions[octant], directions: .all)
+        NSCursor.warmResize(angle: atan2(p.y - other.y, p.x - other.x), outward: true)
     }
 
     var hasSelection: Bool { selectedID != nil }

@@ -30,17 +30,18 @@ final class RegionSelector {
         }
 
         var cursor: NSCursor {
-            let position: NSCursor.FrameResizePosition = switch self {
-            case .topLeft: .topLeft
-            case .top: .top
-            case .topRight: .topRight
-            case .right: .right
-            case .bottomRight: .bottomRight
-            case .bottom: .bottom
-            case .bottomLeft: .bottomLeft
-            case .left: .left
+            let octant = switch self {
+            case .right: 0
+            case .topRight: 1
+            case .top: 2
+            case .topLeft: 3
+            case .left: 4
+            case .bottomLeft: 5
+            case .bottom: 6
+            case .bottomRight: 7
             }
-            return NSCursor.frameResize(position: position, directions: .all)
+            // 暖色的调整大小光标：朝外的小三角深、朝里的浅（和 QQ 一样，一眼看出往外拖是放大）
+            return NSCursor.warmResize(angle: CGFloat(octant) * .pi / 4, outward: true)
         }
     }
 

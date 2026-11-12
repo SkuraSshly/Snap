@@ -11,6 +11,14 @@ final class OverlayView: NSView {
     private let handlesLayer = CAShapeLayer()
     private let sizeLabel: PillLabel
     private var sizeLabelText = ""
+    /// 放在尺寸标签右边的小控件（截图界面的圆角拉条）；随尺寸标签一起摆放、显示、隐藏
+    var accessory: NSView? {
+        didSet {
+            if oldValue !== accessory { oldValue?.removeFromSuperview() }
+            if let accessory, accessory.superview !== self { addSubview(accessory) }
+            placeAccessory()
+        }
+    }
     private var trackingArea: NSTrackingArea?
 
     /// 控制点直径（点）
@@ -99,12 +107,15 @@ final class OverlayView: NSView {
             let dim = CGMutablePath()
             dim.addRect(bounds)
             if let region = state.region {
-                dim.addRect(region)
+                let radius = state.regionStyle == .selection ? min(state.cornerRadius, region.width / 2, region.height / 2) : 0
+                dim.addPath(CGPath(roundedRect: region, cornerWidth: radius, cornerHeight: radius, transform: nil))
                 switch state.regionStyle {
                 case .selection:
-                    // 1 点宽的边框画在选区外侧，不遮挡选中的内容
+                    // 1 点宽的边框画在选区外侧，不遮挡选中的内容；有圆角时跟着圆角
                     borderLayer.lineWidth = 1
-                    borderLayer.path = CGPath(rect: region.insetBy(dx: -0.5, dy: -0.5), transform: nil)
+                    let outline = region.insetBy(dx: -0.5, dy: -0.5)
+                    borderLayer.path = CGPath(roundedRect: outline, cornerWidth: radius > 0 ? radius + 0.5 : 0,
+                                              cornerHeight: radius > 0 ? radius + 0.5 : 0, transform: nil)
                     handlesLayer.path = handlesPath(for: region)
                 case .window:
                     // 识别出的窗口：2 点宽的边框画在窗口内侧，不会被屏幕边缘裁掉
@@ -120,6 +131,19 @@ final class OverlayView: NSView {
             }
             dimLayer.path = dim
         }
+        placeAccessory()
+    }
+
+    /// 小控件放在尺寸标签右边、同一行；放不下时换到标签下面一行
+    private func placeAccessory() {
+        guard let accessory else { return }
+        accessory.isHidden = sizeLabel.isHidden
+        guard !sizeLabel.isHidden else { return }
+        let label = sizeLabel.frame, size = accessory.frame.size
+        var origin = CGPoint(x: label.maxX + 6, y: label.midY - size.height / 2)
+        if origin.x + size.width > bounds.maxX - 2 { origin = CGPoint(x: label.minX, y: label.minY - 6 - size.height) }
+        origin.x = min(max(origin.x, bounds.minX + 2), bounds.maxX - size.width - 2)
+        accessory.setFrameOrigin(origin)
     }
 
     private func handlesPath(for rect: CGRect) -> CGPath {

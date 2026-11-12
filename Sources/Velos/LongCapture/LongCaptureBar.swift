@@ -2,10 +2,10 @@ import AppKit
 
 // MARK: - 控制条
 
-/// [竖向 | 横向] | 长度 | [取消] [编辑] [钉图] [保存] [完成]
+/// [自动滚动] | 长度 | [取消] [编辑] [钉图] [保存] [完成]
 @MainActor
 final class LongCaptureBar: NSPanel {
-    var onAxis: ((ScrollAxis) -> Void)?
+    var onAutoScroll: (() -> Void)?
     var onCancel: (() -> Void)?
     var onSave: (() -> Void)?
     var onDone: (() -> Void)?
@@ -13,7 +13,8 @@ final class LongCaptureBar: NSPanel {
     var onPin: (() -> Void)?
 
     private let bar = FrostedPanel(blending: .behindWindow)
-    private let direction = SegmentedPill(titles: ["竖向", "横向"], help: "滚动方向")
+    private let autoButton = PillButton(title: "自动滚动", symbol: "play.fill", color: WarmPalette.coral,
+                                        help: "自动滚动：匀速、慢慢往下滚（鼠标放在选区里），再点一次停止")
     private let lengthLabel = NSTextField(labelWithString: "")
     private let cancelButton = ToolbarButton(symbol: "xmark", help: "取消长截图（Esc）")
     private let editButton = ToolbarButton(symbol: "square.and.pencil", help: "编辑：结束长截图，打开编辑窗口继续标注")
@@ -40,29 +41,37 @@ final class LongCaptureBar: NSPanel {
         root.addSubview(bar)
         lengthLabel.font = roundedFont(ofSize: 12, weight: .medium, monospacedDigits: true)
         lengthLabel.textColor = WarmPalette(for: bar).ink
-        direction.onSelect = { [weak self] index in self?.onAxis?(index == 0 ? .vertical : .horizontal) }
+        autoButton.action = { [weak self] in self?.onAutoScroll?() }
         cancelButton.action = { [weak self] in self?.onCancel?() }
         editButton.action = { [weak self] in self?.onEdit?() }
         pinButton.action = { [weak self] in self?.onPin?() }
         saveButton.action = { [weak self] in self?.onSave?() }
         doneButton.action = { [weak self] in self?.onDone?() }
-        for view in [direction, lengthLabel, cancelButton, editButton, pinButton, saveButton, doneButton] as [NSView] { bar.addSubview(view) }
-        setLength(0, axis: .vertical, scale: 1)
+        for view in [autoButton, lengthLabel, cancelButton, editButton, pinButton, saveButton, doneButton] as [NSView] { bar.addSubview(view) }
+        setLength(0)
     }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
     /// 显示拼好的长度：「已拼接 2400 像素」
-    func setLength(_ pixels: Int, axis: ScrollAxis, scale: CGFloat) {
+    func setLength(_ pixels: Int) {
         lengthLabel.stringValue = pixels == 0 ? "等待滚动…" : "已拼接 \(pixels) 像素"
-        direction.selectedIndex = axis == .vertical ? 0 : 1
+        relayout()
+    }
+
+    /// 自动滚动的按钮：没在滚时是「自动滚动」，在滚时是「停止」
+    func setAutoScrolling(_ on: Bool) {
+        autoButton.title = on ? "停止" : "自动滚动"
+        autoButton.symbol = on ? "stop.fill" : "play.fill"
+        autoButton.color = on ? WarmPalette.coral.blended(withFraction: 0.25, of: .black) ?? WarmPalette.coral : WarmPalette.coral
+        autoButton.toolTip = on ? "停止自动滚动" : "自动滚动：匀速、慢慢往下滚（鼠标放在选区里），再点一次停止"
         relayout()
     }
 
     /// 正在生成结果：按钮不能再点
     func setBusy() {
-        for control in [direction, cancelButton, editButton, pinButton, saveButton, doneButton] as [WarmControl] { control.isEnabled = false }
+        for control in [autoButton, cancelButton, editButton, pinButton, saveButton, doneButton] as [WarmControl] { control.isEnabled = false }
         lengthLabel.stringValue = "正在生成…"
         relayout()
     }
@@ -74,7 +83,7 @@ final class LongCaptureBar: NSPanel {
             view.frame = CGRect(x: x, y: y, width: width, height: button)
             x += width + 4
         }
-        place(direction, 92)
+        place(autoButton, max(autoButton.fittingWidth, 104))
         x += 6
         let labelSize = lengthLabel.fittingSize
         lengthLabel.frame = CGRect(x: x, y: ((h - labelSize.height) / 2).rounded(), width: max(ceil(labelSize.width), 118),
@@ -103,6 +112,8 @@ final class LongCaptureBar: NSPanel {
     #if DEBUG
     func debugTapEdit() { onEdit?() }
     func debugTapPin() { onPin?() }
+    func debugTapAutoScroll() { onAutoScroll?() }
+    var debugAutoScrollTitle: String { autoButton.title }
     var debugLengthText: String { lengthLabel.stringValue }
     #endif
 }

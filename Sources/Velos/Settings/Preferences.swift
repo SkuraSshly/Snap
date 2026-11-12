@@ -69,7 +69,7 @@ final class Preferences: ObservableObject {
 
     private enum Key: String {
         case showMenuBarIcon, screenshotDirectoryPath, recordingDirectoryPath, hasCompletedOnboarding
-        case imageFormat, jpegQuality, screenshotIncludesCursor, screenshotSaveAs1x
+        case imageFormat, jpegQuality, screenshotIncludesCursor, screenshotSaveAs1x, screenshotCornerRadius
         case screenshotCopyToClipboard, screenshotSaveToFile, screenshotShowThumbnail, hideThumbnailAfterPaste
         case recordingResolution, recordingFrameRate, videoCodec, videoQuality
         case recordSystemAudio, recordMicrophone, microphoneDeviceID, recordingShowsCursor
@@ -94,6 +94,8 @@ final class Preferences: ObservableObject {
     @Published var jpegQuality: Double { didSet { Self.save(jpegQuality, .jpegQuality) } }
     @Published var screenshotIncludesCursor: Bool { didSet { Self.save(screenshotIncludesCursor, .screenshotIncludesCursor) } }
     @Published var screenshotSaveAs1x: Bool { didSet { Self.save(screenshotSaveAs1x, .screenshotSaveAs1x) } }
+    /// 截图的圆角（点，0 是直角）：在截图界面选区左上角的拉条上调，记住上次的大小
+    @Published var screenshotCornerRadius: Double { didSet { Self.save(screenshotCornerRadius, .screenshotCornerRadius) } }
     @Published var screenshotCopyToClipboard: Bool { didSet { Self.save(screenshotCopyToClipboard, .screenshotCopyToClipboard) } }
     @Published var screenshotSaveToFile: Bool { didSet { Self.save(screenshotSaveToFile, .screenshotSaveToFile) } }
     @Published var screenshotShowThumbnail: Bool { didSet { Self.save(screenshotShowThumbnail, .screenshotShowThumbnail) } }
@@ -162,6 +164,7 @@ final class Preferences: ObservableObject {
         jpegQuality = Self.load(.jpegQuality, 0.95)
         screenshotIncludesCursor = Self.load(.screenshotIncludesCursor, false)
         screenshotSaveAs1x = Self.load(.screenshotSaveAs1x, false)
+        screenshotCornerRadius = Self.load(.screenshotCornerRadius, 0)
         screenshotCopyToClipboard = Self.load(.screenshotCopyToClipboard, true)
         // 默认不自动保存：按 Enter 只复制，需要时在缩略图上点「保存」或按 ⌘S
         screenshotSaveToFile = Self.load(.screenshotSaveToFile, false)

@@ -82,7 +82,7 @@ final class AnnotationEditorWindowController: NSObject, NSWindowDelegate {
         canvas = EditorCanvasView(image: image, imageSize: imageSize, displaySize: displaySize, scale: capture.scale)
         // 最大放大到原图 1 个像素 = 屏幕 4 个像素（再大只是更大的马赛克，看不到更多细节）；最小能看到整张图
         pixelRatio = capture.scale / screen.backingScaleFactor
-        zoomView = EditorZoomView(frame: CGRect(origin: .zero, size: viewSize), canvas: canvas,
+        zoomView = EditorZoomView(frame: CGRect(origin: .zero, size: viewSize), canvas: canvas, image: image,
                                   minMagnification: fitAll / zoom, maxMagnification: max(1, 4 * pixelRatio / zoom))
         let contentSize = CGSize(width: max(viewSize.width, 560), height: viewSize.height + toolbarArea)
         window = EditorWindow(contentRect: CGRect(origin: .zero, size: contentSize),

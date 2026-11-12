@@ -252,9 +252,12 @@ final class AnnotationRenderer {
         let pixels = base.pixelRect(for: rect)
         guard !pixels.isEmpty, let source = base.image.cropping(to: pixels) else { return nil }
         let space = base.image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        // 切了圆角的截图（四角透明）在编辑窗口里再标注：保留透明，标注也不画到圆角外面
+        let transparent = ImageEncoder.hasTransparentCorner(source)
+        let alpha = transparent ? CGImageAlphaInfo.premultipliedFirst : CGImageAlphaInfo.noneSkipFirst
         guard let ctx = CGContext(data: nil, width: Int(pixels.width), height: Int(pixels.height), bitsPerComponent: 8,
                                   bytesPerRow: 0, space: space,
-                                  bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+                                  bitmapInfo: alpha.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         else { return nil }
         // 先按像素 1:1 画底图（不插值，原图像素不变），再按「点」坐标叠加标注
         ctx.interpolationQuality = .none
@@ -263,6 +266,16 @@ final class AnnotationRenderer {
         ctx.translateBy(x: -rect.minX, y: -rect.minY)
         ctx.interpolationQuality = .high
         draw(annotations, in: ctx)
+        if transparent {
+            // 按原图的透明度裁掉圆角外的标注
+            ctx.saveGState()
+            ctx.translateBy(x: rect.minX, y: rect.minY)
+            ctx.scaleBy(x: 1 / base.scale, y: 1 / base.scale)
+            ctx.setBlendMode(.destinationIn)
+            ctx.interpolationQuality = .none
+            ctx.draw(source, in: CGRect(x: 0, y: 0, width: pixels.width, height: pixels.height))
+            ctx.restoreGState()
+        }
         return ctx.makeImage()
     }
 }

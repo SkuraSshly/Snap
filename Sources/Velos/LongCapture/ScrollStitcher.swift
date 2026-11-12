@@ -35,27 +35,24 @@ struct PixelFrame: @unchecked Sendable {
     static let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
 }
 
-/// 滚动方向
-enum ScrollAxis: Sendable {
-    case vertical, horizontal
-}
-
 /// 长截图拼接：每来一帧选区的新画面，算出页面相对上一帧滚动了多少，把新露出来的部分接到结果后面。
+/// 只看画面，不读取滚轮事件（鼠标、触控板、平滑滚动工具都一样）。判断用的阈值都在 `Tuning` 里。
 ///
 /// 做法：
-/// - 每一行（横向滚动时是每一列）算一个指纹（像素哈希），纯色的行不参与比较（空白处到处都一样，会误判）。
+/// - 起点：还没开始滚动时，起点始终是最新的画面；开始滚动的那一刻，起点就是滚动前一瞬间的画面
+///   （选好区域后从调度中心回来、页面刚加载完，都以回来后、加载完的样子为准）
+/// - 每一行算一个指纹（像素哈希），纯色的行不参与比较（空白处到处都一样，会误判）。
 ///   两侧边缘一小条不参与：滚动时 macOS 会在右侧浮出滚动条、并且跟着移动，算进去会让每一行都对不上
 /// - 新帧的每一行去上一帧里找指纹相同的行，按「位置差」投票，票最多、且重叠部分核对得上的就是滚动距离
-/// - 像素不完全一致时（有的 App 滚动时文字抗锯齿、图片缩放有细微差别）：每行再记一个亮度轮廓（分 16 段的平均亮度），
-///   找轮廓最接近的位置；有滚轮提供的大致滚动量时只在它附近找。附近有几个差不多像的位置时不冒险，算对不上
-/// - 左右不动的边栏（例如聊天软件的会话列表）：第一次滚动时比较前后两帧，找出真正在滚动的那一段，
-///   只用这一段比对、拼接；边栏只保留第一帧的样子，往下延伸的部分用边栏自己的背景色填满，不会一段段重复
-/// - 顶部、底部固定不动的部分（标题栏、聊天输入框）：在原位置不变、又和滚动后的内容对不上的行。
-///   顶部的只来自第一帧，底部的最后只在末尾接一次
-/// - 还在选区里的内容，每来一帧就用最新的画面覆盖：快速滚动时刚露出来的部分常常还没画完（空白、模糊），
-///   等它画好了会自动换成画好的样子；滚出选区后才定下来
+/// - 像素不完全一致时（平滑滚动停在半个像素上、文字抗锯齿、颜色转换的抖动）：每行再记一个亮度轮廓
+///   （分 16 段的平均亮度），找最像的位置；内容相似、几个距离都说得通时，选和刚才的滚动一致的那个，否则不冒险
+/// - 左右不动的边栏（会话列表、吸顶的侧栏）：每次滚动都逐列看它有没有跟着滚动，连成一片的不动的列就是边栏，
+///   只保留第一屏的样子，往下用边栏的背景色延伸；整行对不上时，只用真正在滚的那几列再比对一次
+/// - 顶部、底部不跟着滚动的栏（标题栏、半透明的磨砂标题栏、聊天输入框）：顶部的只来自第一帧，底部的只在末尾接一次
+/// - 还在选区里的内容，每来一帧就用最新的画面覆盖：刚滚到时没画完的部分（空白、模糊），画好后自动换上
 /// - 往回滚：只移动当前位置，不重复拼接；再往下滚到没拼过的地方才继续接
-/// - 一次滚得太远（新旧画面没有重叠）：对不上，提示用户往回滚一点，回到能对上的位置后继续
+/// - 一次滚得太远（新旧画面没有重叠）：先等用户往回滚；如果页面还在稳定地往下滚（相邻几帧逐像素一致地平移），
+///   就从当前画面接着拼，跳过没截到的一段。调度中心、切换桌面这类画面不算，回到原页面后接着拼
 /// - 长度有上限，避免占用过多内存
 struct ScrollStitcher {
     enum Event: Equatable, Sendable {
@@ -73,7 +70,39 @@ struct ScrollStitcher {
         case limitReached
     }
 
-    let axis: ScrollAxis
+    /// 判断用的阈值，集中在这里调。像素差都是「每个通道 0~255，三个通道平均」
+    enum Tuning {
+        /// 两个像素算「一样」：每个通道最多差几级（抗锯齿、颜色转换的抖动、细微渐变）
+        static let pixelTolerance = 6
+        /// 一行和上一帧原位置那一行平均差不超过它：原地没变（固定的栏、没滚动）
+        static let unchangedLine: Float = 1.2
+        /// 容差比对：最像的那个滚动距离，平均差不超过它才可信
+        static let maxCost: Float = 6
+        /// 还没开始滚动时更严：这一下认作「开始滚动」，起点就定了，调度中心退出之类的动画不能被当成滚动
+        static let startMaxCost: Float = 4
+        /// 和刚才的滚动一致的距离，只要不比最像的差太多（差别 ≤ 最像的 × ratio + extra）就选它
+        static let priorSlack: (ratio: Float, extra: Float) = (1.3, 0.5)
+        /// 最像的距离要明显比第二像的好（第二像的 ≥ 最像的 × ratio + extra），否则不冒险
+        static let clearlyBetter: (ratio: Float, extra: Float) = (1.6, 1)
+        /// 逐像素比对：重叠部分参与比较的行至少这么多对得上
+        static let exactMatchFraction = 0.85
+        /// 真正在滚动的那一段占整行的百分比范围：太窄、太宽都不当作「两侧有边栏」
+        static let bandMinPercent = 15
+        static let bandMaxPercent = 95
+        /// 一列里至少这么多行对得上，才算「跟着滚动」或「原地没动」
+        static let columnMatchFraction: Float = 0.8
+        /// 连续几次滚动都没跟着滚，才算边栏；连续几次跟着滚，就算回正文（宁可多拼，不丢内容）
+        static let sidebarStreak = 3
+        static let contentStreak = 2
+        /// 认顶部的栏：一行和滚动前的位置平均差不超过它算「对得上」；连续几行明确跟着滚动就到头了
+        static let barLineMatch: Float = 2
+        static let barEndRun = 3
+        /// 跟丢后接回：连续这么多帧对不上（帧只在画面变化时才来，大约是滚动中的四分之一秒），
+        /// 其中至少这么多对相邻帧是逐像素一致地往前平移，才从当前画面接回
+        static let outrunFrames = 15
+        static let steadyPairs = 3
+    }
+
     /// 沿滚动方向的最大长度（像素）
     let maxLength: Int
     /// 比对时不看的两侧边缘（像素，沿每一行的方向）：前面一小条、后面一条（滚动条）
@@ -101,26 +130,22 @@ struct ScrollStitcher {
     private var movingHeader = 0
     /// 最近一次真实的滚动距离（往前为正）：内容很像、几个距离都说得通时，选和刚才的滚动一致的那个
     private var recentShift: Int?
-    /// 连续对不上的帧数、这些帧之间页面移动的总距离、上一帧对不上的帧的指纹：判断是不是滚得太快、被甩开了
+    /// 连续对不上的帧数、上一张对不上的帧的指纹：判断是不是滚得太快、被甩开了
     private var lostFrames = 0
-    private var lostMotion = 0
     private var lostLines: [Line]?
-    private var lostFrame: PixelFrame?
     /// 对不上的这几帧里，连续几对是逐像素一致地平移（正数往前、负数往回）：页面确实在稳定地滚动
     private var steadyPairs = 0
     /// 末尾固定部分的长度（按最近一次滚动算）
     private var footerLength = 0
-    /// 拼好的内容：一行接一行（横向时是一列接一列，每列的像素连续存放），每行 cross × 4 字节
+    /// 拼好的内容：一行接一行，每行 cross × 4 字节
     private var content = Data()
-    /// 一行有多少像素（竖向是宽度，横向是高度）
+    /// 一行有多少像素（帧的宽度）
     private var cross = 0
     /// 真正在滚动的那一段（沿每一行，像素）；nil 表示整行都在滚动
     private var band: Range<Int>?
-    /// 已经找过滚动的那一段（第一次滚动时找，之后不再变）
-    private var bandResolved = false
     /// 边栏往下延伸的部分用的颜色：每个位置一个（边栏的背景色）
     private var sideFill: [UInt32] = []
-    /// 每一列（横向时是每一行）目前算边栏还是正文，以及连续几次滚动看到它「不跟着滚动」「跟着滚动」
+    /// 每一列目前算边栏还是正文，以及连续几次滚动看到它「不跟着滚动」「跟着滚动」
     private var sideColumn: [Bool] = []
     private var sideStreak: [Int] = []
     private var contentStreak: [Int] = []
@@ -136,46 +161,50 @@ struct ScrollStitcher {
     /// 上一帧的亮度轮廓（算过就留着，换帧时清掉）
     private var lastProfiles: [Profile]?
 
-    init(axis: ScrollAxis, maxLength: Int = 20_000, edgeMargin: (leading: Int, trailing: Int) = (0, 0)) {
-        self.axis = axis
+    init(maxLength: Int = 20_000, edgeMargin: (leading: Int, trailing: Int) = (0, 0)) {
         self.maxLength = maxLength
         self.edgeMargin = edgeMargin
     }
 
     // MARK: - 加入一帧
 
+    /// 这一帧页面滚动了多少像素（往下为正）；没认出滚动时为 nil。自动滚动按它判断方向、有没有到底
+    private(set) var lastShift: Int?
+
     /// 只看画面：不需要、也不读取滚轮事件（滚动方式、滚动工具都不影响）
     @discardableResult
     mutating func add(_ frame: PixelFrame) -> Event {
+        lastShift = nil
         let event = stitch(frame)
+        // 还没开始滚动：起点始终是最新的画面（开始滚动前一瞬间的样子）。选好区域后画面还会变——
+        // 刚从调度中心回来、页面刚加载完、窗口刚画好——起点都跟着换成最新的，滚动时从这里开始拼
+        if first != nil, event == .lost || event == .unchanged {
+            rebaseline(on: frame)
+            return .unchanged
+        }
         if event == .lost {
             if let recovered = recoverIfOutrun(frame) { return recovered }
         } else {
-            lostFrames = 0
-            lostMotion = 0
-            lostLines = nil
-            lostFrame = nil
-            steadyPairs = 0
+            resetLost()
         }
         return event
     }
 
     private mutating func stitch(_ frame: PixelFrame) -> Event {
-        var lines = Self.lines(of: frame, axis: axis, span: span(for: frame))
+        var lines = Self.lines(of: frame, span: span(for: frame))
         guard let previous = last else {
             first = frame
             last = frame
             lastLines = lines
             lastProfiles = nil
-            cross = axis == .vertical ? frame.width : frame.height
+            cross = frame.width
             return .started
         }
         guard previous.width == frame.width, previous.height == frame.height else { return .lost }
         if reachedLimit { return .limitReached }
 
         // 还没滚动过：画面变了的话，看是不是只有一段在滚动（两侧是不动的边栏）；是的话以后只用这一段
-        if !bandResolved, first != nil, let found = adoptScrollingBand(previous, frame) {
-            bandResolved = true
+        if first != nil, let found = adoptScrollingBand(previous, frame) {
             lines = found
         }
 
@@ -183,14 +212,16 @@ struct ScrollStitcher {
         var profiles: [Profile]?
         if shift == nil {
             // 像素对不上：用亮度轮廓再找一次
-            let previousProfiles = lastProfiles ?? Self.profiles(of: previous, axis: axis, span: span(for: previous))
+            let previousProfiles = lastProfiles ?? Self.profiles(of: previous, span: span(for: previous))
             lastProfiles = previousProfiles
-            profiles = Self.profiles(of: frame, axis: axis, span: span(for: frame))
+            profiles = Self.profiles(of: frame, span: span(for: frame))
             // 滚动的那部分（去掉顶部、底部固定的部分）：判断「原地重画」时只看这里。还没滚动过时不知道哪些是固定的，不判原地重画
             let inner: Range<Int>? = first == nil && headerLength < lines.count - footerLength
                 ? headerLength..<(lines.count - footerLength) : nil
+            // 还没开始滚动时更严：这一下认作「开始滚动」，起点就定了，调度中心退出之类的动画不能被当成滚动
             shift = Self.tolerantShift(previous: (lastLines, previousProfiles), current: (lines, profiles!), prior: recentShift,
-                                       frames: (previous, frame), axis: axis, span: span(for: frame), inner: inner)
+                                       frames: (previous, frame), span: span(for: frame), inner: inner,
+                                       maxCost: first != nil ? Tuning.startMaxCost : Tuning.maxCost)
         }
         // 刚才一直往下滚，这一帧却「往回跳了大半屏」（或者反过来）：多半是相似的内容在很窄的重叠里凑巧对上，不可信
         func implausible(_ d: Int) -> Bool {
@@ -203,9 +234,9 @@ struct ScrollStitcher {
         if shift == nil, first == nil {
             let saved = (band, sideFill, lastLines, lastProfiles)
             if let found = adoptScrollingBand(previous, frame), let d = Self.shift(from: lastLines, to: found)
-                ?? Self.tolerantShift(previous: (lastLines, Self.profiles(of: previous, axis: axis, span: span(for: previous))),
-                                      current: (found, Self.profiles(of: frame, axis: axis, span: span(for: frame))), prior: recentShift,
-                                      frames: (previous, frame), axis: axis, span: span(for: frame), inner: nil),
+                ?? Self.tolerantShift(previous: (lastLines, Self.profiles(of: previous, span: span(for: previous))),
+                                      current: (found, Self.profiles(of: frame, span: span(for: frame))), prior: recentShift,
+                                      frames: (previous, frame), span: span(for: frame), inner: nil),
                d != 0, !implausible(d) {
                 lines = found
                 profiles = nil
@@ -231,7 +262,7 @@ struct ScrollStitcher {
         let footer = Self.footer(previous: lastLines, current: lines, shift: shift)
         let scrollEnd = n - footer
         movingHeader = max(movingHeader, Self.unmovedTop(previous, frame, previousLines: lastLines, currentLines: lines, shift: shift,
-                                                         axis: axis, span: span(for: frame)))
+                                                         span: span(for: frame)))
         let header = min(max(first != nil ? Self.header(previous: lastLines, current: lines, shift: shift) : headerLength, movingHeader),
                          scrollEnd)
         // 滚动的部分和已拼好的内容必须还有重叠：新帧滚动部分的开头不能越过已拼好的末尾。
@@ -242,19 +273,19 @@ struct ScrollStitcher {
         guard baseEnd - (basePosition + shift) >= header else {
             return Self.mostlySame(lastLines, lines) ? .unchanged : .lost
         }
-        bandResolved = true
         recentShift = shift
+        lastShift = shift
         footerLength = footer
         // 每次滚动都重新确认两侧哪些列是不跟着滚动的边栏（第一次认错也能纠正过来）
         if updateSidebars(previous, frame, shift: shift, rows: header..<scrollEnd) {
-            lines = Self.lines(of: frame, axis: axis, span: span(for: frame))
+            lines = Self.lines(of: frame, span: span(for: frame))
         }
         if let firstFrame = first {
             // 第一次滚动：第一帧去掉末尾固定部分，作为开头；顶部固定部分以后不再覆盖
             headerLength = header
             content = Data()
             content.reserveCapacity(scrollEnd * cross * 4 * 4)
-            Self.copy(firstFrame, axis: axis, lines: 0..<scrollEnd, into: &content, at: 0)
+            Self.copy(firstFrame, lines: 0..<scrollEnd, into: &content, at: 0)
             committedEnd = scrollEnd
             position = 0
             first = nil
@@ -268,17 +299,7 @@ struct ScrollStitcher {
         // 当前帧露出了已拼好的末尾之后的内容：接上（顶部固定的部分永远不接，上面已经保证不会越过它）
         let start = max(header, committedEnd - position)
         guard start < scrollEnd else { return .moved }
-        var range = start..<scrollEnd
-        let room = maxLength - committedEnd - footerLength
-        if range.count > room {
-            range = start..<(start + max(0, room))
-            reachedLimit = true
-        }
-        guard !range.isEmpty else { return .limitReached }
-        Self.copy(frame, axis: axis, lines: range, into: &content, at: committedEnd, only: band,
-                  fill: band == nil ? nil : sideFill)
-        committedEnd += range.count
-        return reachedLimit ? .limitReached : .appended(range.count)
+        return append(frame, lines: start..<scrollEnd)
     }
 
     /// 滚得太快、被甩开了：和上一次对上的那一帧已经没有重叠，而且页面还在往前滚（这几帧之间一直往下走）——
@@ -286,77 +307,76 @@ struct ScrollStitcher {
     /// 往回滚时不这样做：回到已经拼过的地方，接上去就重复了，等滚回能对上的位置
     private mutating func recoverIfOutrun(_ frame: PixelFrame) -> Event? {
         guard let previous = last, previous.width == frame.width, previous.height == frame.height else { return nil }
-        let lines = Self.lines(of: frame, axis: axis, span: span(for: frame))
+        let lines = Self.lines(of: frame, span: span(for: frame))
         // 这几帧彼此之间是不是「页面在稳定地滚动」：相邻两帧逐像素一致地平移、而且方向一致。
         // 只认逐像素一致：调度中心、切换桌面的动画（窗口缩略图缩放、上下移动）用容差比对也像在移动，
-        // 认了就会把那些画面接进长图、当成新的起点，回到原来的页面后反而接不上
-        var pairShift: Int?
-        if let earlier = lostLines, lostFrame != nil, let d = Self.shift(from: earlier, to: lines), d != 0 {
-            pairShift = d
-            lostMotion += d
+        // 认了就会把那些画面接进长图、当成新的参照，回到原来的页面后反而接不上
+        if let earlier = lostLines, let d = Self.shift(from: earlier, to: lines), d != 0 {
             steadyPairs = steadyPairs != 0 && (steadyPairs > 0) != (d > 0) ? (d > 0 ? 1 : -1) : steadyPairs + (d > 0 ? 1 : -1)
         } else {
             steadyPairs = 0
         }
-        let earlierFrame = lostFrame
         lostLines = lines
-        lostFrame = frame
         lostFrames += 1
-        if first != nil {
-            // 还没开始拼：开头截到的那一张是过渡画面（刚从调度中心回来、切换桌面的动画、窗口还没画好），
-            // 之后的画面彼此能对上（页面在正常滚动）却一直对不上它——起点换成上一张正常的画面，重新开始
-            guard lostFrames >= 3, pairShift != nil, abs(steadyPairs) >= 2, let restart = earlierFrame else { return nil }
-            self = ScrollStitcher(axis: axis, maxLength: maxLength, edgeMargin: edgeMargin)
-            add(restart)
-            return add(frame)
-        }
-        guard lostFrames >= Self.outrunFrames, lostMotion > 0, steadyPairs >= 3, (recentShift ?? 0) > 0 else { return nil }
-        let n = lines.count
+        guard lostFrames >= Tuning.outrunFrames, steadyPairs >= Tuning.steadyPairs, (recentShift ?? 0) > 0 else { return nil }
         let header = max(headerLength, movingHeader)
-        let scrollEnd = n - footerLength
+        let scrollEnd = lines.count - footerLength
         guard header < scrollEnd else { return nil }
-        var range = header..<scrollEnd
-        let room = maxLength - committedEnd - footerLength
-        if range.count > room {
-            range = header..<(header + max(0, room))
-            reachedLimit = true
-        }
-        guard !range.isEmpty else { return .limitReached }
-        Self.copy(frame, axis: axis, lines: range, into: &content, at: committedEnd, only: band,
-                  fill: band == nil ? nil : sideFill)
+        // 当前帧第 header 行接在已拼好的末尾
         position = committedEnd - header
-        committedEnd += range.count
         last = frame
         lastLines = lines
         lastProfiles = nil
+        resetLost()
+        return append(frame, lines: header..<scrollEnd)
+    }
+
+    private mutating func resetLost() {
         lostFrames = 0
-        lostMotion = 0
-        self.lostLines = nil
-        lostFrame = nil
+        lostLines = nil
         steadyPairs = 0
+    }
+
+    /// 把当前帧的这几行接到已拼好的末尾（到长度上限为止）
+    private mutating func append(_ frame: PixelFrame, lines range: Range<Int>) -> Event {
+        var range = range
+        let room = maxLength - committedEnd - footerLength
+        if range.count > room {
+            range = range.lowerBound..<(range.lowerBound + max(0, room))
+            reachedLimit = true
+        }
+        guard !range.isEmpty else { return .limitReached }
+        Self.copy(frame, lines: range, into: &content, at: committedEnd, only: band,
+                  fill: band == nil ? nil : sideFill)
+        committedEnd += range.count
         return reachedLimit ? .limitReached : .appended(range.count)
     }
 
-    /// 连续这么多帧对不上、页面还在往前滚，就从当前画面接回（帧只在画面变化时才来，大约是滚动中的四分之一秒）
-    static let outrunFrames = 15
+    /// 还没开始滚动时换起点：以后从这一帧开始拼（两侧边栏等还没定下来的判断一并清掉）
+    private mutating func rebaseline(on frame: PixelFrame) {
+        self = ScrollStitcher(maxLength: maxLength, edgeMargin: edgeMargin)
+        _ = stitch(frame)
+    }
 
     /// 找出这一对画面里真正在滚动的那一段（两侧是不动的边栏），而且只用这一段能认出滚动：
     /// 采用它（以后只比对、只拼接这一段，边栏用背景色延伸），上一帧的指纹换成这一段的，返回当前帧这一段的指纹
     private mutating func adoptScrollingBand(_ previous: PixelFrame, _ frame: PixelFrame) -> [Line]? {
         guard let changed = scrollingSpan(previous, frame) else { return nil }
         let full = lineCrossCount(frame)
-        guard changed.count >= full * 15 / 100, changed.count <= full * 95 / 100, changed != band else { return nil }
+        guard changed.count * 100 >= full * Tuning.bandMinPercent, changed.count * 100 <= full * Tuning.bandMaxPercent,
+              changed != band else { return nil }
         let saved = band
         band = changed
         let span = span(for: frame)
-        let bandPrevious = Self.lines(of: previous, axis: axis, span: span)
-        let bandCurrent = Self.lines(of: frame, axis: axis, span: span)
+        let bandPrevious = Self.lines(of: previous, span: span)
+        let bandCurrent = Self.lines(of: frame, span: span)
         // 逐像素对不上（平滑滚动停在半个像素上、颜色转换的抖动）时，用容差比对再认一次
         var d = Self.shift(from: bandPrevious, to: bandCurrent)
         if d == nil {
-            d = Self.tolerantShift(previous: (bandPrevious, Self.profiles(of: previous, axis: axis, span: span)),
-                                   current: (bandCurrent, Self.profiles(of: frame, axis: axis, span: span)), prior: nil,
-                                   frames: (previous, frame), axis: axis, span: span, inner: nil)
+            d = Self.tolerantShift(previous: (bandPrevious, Self.profiles(of: previous, span: span)),
+                                   current: (bandCurrent, Self.profiles(of: frame, span: span)), prior: nil,
+                                   frames: (previous, frame), span: span, inner: nil,
+                                   maxCost: first != nil ? Tuning.startMaxCost : Tuning.maxCost)
         }
         guard let d, d != 0 else {
             band = saved   // 认不出来：照旧
@@ -364,7 +384,7 @@ struct ScrollStitcher {
         }
         lastLines = bandPrevious
         lastProfiles = nil
-        sideFill = Self.sideFill(of: previous, axis: axis, band: changed)
+        sideFill = Self.sideFill(of: previous, band: changed)
         sideColumn = (0..<full).map { !changed.contains($0) }
         sideStreak = [Int](repeating: 0, count: full)
         contentStreak = [Int](repeating: 0, count: full)
@@ -388,33 +408,25 @@ struct ScrollStitcher {
         guard high - low >= 8 else { return false }
         let step = max(1, (high - low) / 160)
         let bpr = frame.bytesPerRow
-        let vertical = axis == .vertical
-        var follows = [Bool](repeating: false, count: crossCount), still = [Bool](repeating: false, count: crossCount)
+                var follows = [Bool](repeating: false, count: crossCount), still = [Bool](repeating: false, count: crossCount)
         previous.data.withUnsafeBytes { prevRaw in
             frame.data.withUnsafeBytes { curRaw in
                 guard let pb = prevRaw.baseAddress, let cb = curRaw.baseAddress else { return }
                 func pixel(_ base: UnsafeRawPointer, _ c: Int, _ i: Int) -> UInt32 {
-                    base.loadUnaligned(fromByteOffset: vertical ? i * bpr + c * 4 : c * bpr + i * 4, as: UInt32.self)
-                }
-                func near(_ a: UInt32, _ b: UInt32) -> Bool {
-                    if a == b { return true }
-                    for k in stride(from: 0, to: 24, by: 8) where abs(Int((a >> UInt32(k)) & 0xff) - Int((b >> UInt32(k)) & 0xff)) > 6 {
-                        return false
-                    }
-                    return true
+                    base.loadUnaligned(fromByteOffset: i * bpr + c * 4, as: UInt32.self)
                 }
                 for c in 0..<crossCount {
                     var moved = 0, stayed = 0, total = 0
                     var i = low
                     while i < high {
                         let now = pixel(cb, c, i)
-                        if near(now, pixel(pb, c, i + d)) { moved += 1 }
-                        if near(now, pixel(pb, c, i)) { stayed += 1 }
+                        if Self.near(now, pixel(pb, c, i + d)) { moved += 1 }
+                        if Self.near(now, pixel(pb, c, i)) { stayed += 1 }
                         total += 1
                         i += step
                     }
-                    follows[c] = moved * 5 >= total * 4
-                    still[c] = stayed * 5 >= total * 4
+                    follows[c] = Float(moved) >= Float(total) * Tuning.columnMatchFraction
+                    still[c] = Float(stayed) >= Float(total) * Tuning.columnMatchFraction
                 }
             }
         }
@@ -423,11 +435,11 @@ struct ScrollStitcher {
             if follows[c] {
                 contentStreak[c] += 1
                 sideStreak[c] = 0
-                if contentStreak[c] >= 2 { sideColumn[c] = false }
+                if contentStreak[c] >= Tuning.contentStreak { sideColumn[c] = false }
             } else {
                 sideStreak[c] += 1
                 contentStreak[c] = 0
-                if sideStreak[c] >= 3 { sideColumn[c] = true }
+                if sideStreak[c] >= Tuning.sidebarStreak { sideColumn[c] = true }
             }
         }
         var left = 0
@@ -435,10 +447,10 @@ struct ScrollStitcher {
         var right = 0
         while right < crossCount - left, sideColumn[crossCount - 1 - right] { right += 1 }
         var proposed: Range<Int>? = left == 0 && right == 0 ? nil : left..<(crossCount - right)
-        if let p = proposed, p.count < crossCount * 15 / 100 { proposed = band }   // 剩下的太窄：不可信，保持原样
+        if let p = proposed, p.count * 100 < crossCount * Tuning.bandMinPercent { proposed = band }   // 剩下的太窄：不可信，保持原样
         guard proposed != band else { return false }
         band = proposed
-        if let proposed { sideFill = Self.sideFill(of: previous, axis: axis, band: proposed) }
+        if let proposed { sideFill = Self.sideFill(of: previous, band: proposed) }
         return true
     }
 
@@ -451,10 +463,10 @@ struct ScrollStitcher {
         let high = min(committedEnd, position + n - footerLength)
         guard low < high else { return }
         // 只覆盖滚动的那一段：边栏保持第一帧的样子
-        Self.copy(frame, axis: axis, lines: (low - position)..<(high - position), into: &content, at: low, only: band)
+        Self.copy(frame, lines: (low - position)..<(high - position), into: &content, at: low, only: band)
     }
 
-    private func lineCrossCount(_ frame: PixelFrame) -> Int { axis == .vertical ? frame.width : frame.height }
+    private func lineCrossCount(_ frame: PixelFrame) -> Int { frame.width }
 
     /// 比对时看每一行的哪一段：滚动的那一段（没有边栏时是整行），再去掉两侧边缘（只在足够长时才去掉）
     private func span(for frame: PixelFrame) -> Range<Int> {
@@ -473,9 +485,9 @@ struct ScrollStitcher {
         var all = content
         if footerLength > 0 {
             let n = lineCount(last)
-            Self.copy(last, axis: axis, lines: (n - footerLength)..<n, into: &all, at: end)
+            Self.copy(last, lines: (n - footerLength)..<n, into: &all, at: end)
         }
-        return Self.image(lines: all, count: end + footerLength, cross: cross, axis: axis, colorSpace: last.colorSpace)
+        return Self.image(lines: all, count: end + footerLength, cross: cross, colorSpace: last.colorSpace)
     }
 
     /// 拼好的内容实际到哪里为止：去掉滚过头时拉出来的空白。
@@ -493,10 +505,7 @@ struct ScrollStitcher {
             for line in end..<committedEnd {
                 for x in stride(from: span.lowerBound, to: span.upperBound, by: 3) {
                     let p = base.loadUnaligned(fromByteOffset: line * lineBytes + x * 4, as: UInt32.self)
-                    for shift in stride(from: 0, to: 24, by: 8) {
-                        let a = Int((p >> UInt32(shift)) & 0xff), b = Int((reference >> UInt32(shift)) & 0xff)
-                        if abs(a - b) > 6 { return false }
-                    }
+                    if !Self.near(p, reference) { return false }
                 }
             }
             return true
@@ -504,70 +513,104 @@ struct ScrollStitcher {
         return blank ? end : committedEnd
     }
 
-    /// 预览用：拼好的内容最后 maxLines 行（不含末尾固定部分），一张图
-    func previewParts(maxLines: Int = 3000) -> [CGImage] {
-        guard let last else { return [] }
-        if let first { return Self.image(of: first).map { [$0] } ?? [] }
-        let count = min(committedEnd, maxLines)
+    /// 预览用的小图：宽 pixelWidth 像素，最高 pixelHeight 像素。显示的是「当前滚到的位置」往上的那一段
+    /// （往下滚时是最新拼上的，往回滚时跟着回去），直接缩小画进一张小图——不复制大段像素，可以每秒更新几十次
+    func previewImage(pixelWidth: Int, pixelHeight: Int) -> CGImage? {
+        guard let last, pixelWidth > 0, pixelHeight > 0 else { return nil }
+        if let first {
+            guard let image = Self.image(of: first) else { return nil }
+            return Self.scaled(image, width: pixelWidth, maxHeight: pixelHeight, colorSpace: first.colorSpace)
+        }
+        let scale = Double(pixelWidth) / Double(cross)
+        let fitting = max(1, Int(Double(pixelHeight) / scale))
+        let viewportEnd = min(committedEnd, max(fitting, position + lineCount(last) - footerLength))
+        let start = max(0, viewportEnd - fitting)
+        guard viewportEnd > start else { return nil }
         let lineBytes = cross * 4
-        let tail = content.subdata(in: (committedEnd - count) * lineBytes..<committedEnd * lineBytes)
-        return Self.image(lines: tail, count: count, cross: cross, axis: axis, colorSpace: last.colorSpace).map { [$0] } ?? []
+        return content.withUnsafeBytes { raw -> CGImage? in
+            // 只在这个闭包里用、马上画完，不需要复制
+            guard let base = raw.baseAddress,
+                  let provider = CGDataProvider(dataInfo: nil, data: base + start * lineBytes, size: (viewportEnd - start) * lineBytes,
+                                                releaseData: { _, _, _ in }),
+                  let slice = CGImage(width: cross, height: viewportEnd - start, bitsPerComponent: 8, bitsPerPixel: 32,
+                                      bytesPerRow: lineBytes, space: last.colorSpace,
+                                      bitmapInfo: CGBitmapInfo(rawValue: PixelFrame.bitmapInfo), provider: provider,
+                                      decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
+            return Self.scaled(slice, width: pixelWidth, maxHeight: pixelHeight, colorSpace: last.colorSpace)
+        }
     }
 
-    private func lineCount(_ frame: PixelFrame) -> Int { axis == .vertical ? frame.height : frame.width }
+    /// 按宽度等比缩小，超出 maxHeight 时只留最下面的部分
+    private static func scaled(_ image: CGImage, width: Int, maxHeight: Int, colorSpace: CGColorSpace) -> CGImage? {
+        let fullHeight = Int((Double(image.height) * Double(width) / Double(image.width)).rounded())
+        let height = max(1, min(maxHeight, fullHeight))
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                                  bitmapInfo: PixelFrame.bitmapInfo) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: fullHeight))   // 底边对齐：最新的部分在下面
+        return ctx.makeImage()
+    }
+
+    private func lineCount(_ frame: PixelFrame) -> Int { frame.height }
+
+    // MARK: - 像素比较
+
+    /// 两个像素算「一样」：每个通道相差不超过 Tuning.pixelTolerance（抗锯齿、颜色转换的抖动、细微渐变都算一样）
+    static func near(_ a: UInt32, _ b: UInt32) -> Bool {
+        if a == b { return true }
+        for k in stride(from: 0, to: 24, by: 8)
+        where abs(Int((a >> UInt32(k)) & 0xff) - Int((b >> UInt32(k)) & 0xff)) > Tuning.pixelTolerance {
+            return false
+        }
+        return true
+    }
+
+    /// 帧 a 第 j 行和帧 b 第 i 行的平均像素差：每个通道 0~255，三个通道平均；沿 span 每隔 step 个像素取一个
+    private static func lineDifference(_ a: UnsafeRawPointer, _ j: Int, _ b: UnsafeRawPointer, _ i: Int, bytesPerRow bpr: Int,
+                                       span: Range<Int>, step: Int) -> Float {
+        var total = 0, count = 0
+        var x = span.lowerBound
+        while x < span.upperBound {
+            let (ao, bo) = (j * bpr + x * 4, i * bpr + x * 4)
+            let p = a.loadUnaligned(fromByteOffset: ao, as: UInt32.self)
+            let q = b.loadUnaligned(fromByteOffset: bo, as: UInt32.self)
+            if p != q {
+                for k in stride(from: 0, to: 24, by: 8) {
+                    total += abs(Int((p >> UInt32(k)) & 0xff) - Int((q >> UInt32(k)) & 0xff))
+                }
+            }
+            count += 1
+            x += step
+        }
+        return count == 0 ? 0 : Float(total) / Float(count * 3)
+    }
 
     // MARK: - 指纹
 
-    /// 每一行（或每一列）的指纹。像素按 32 位整数读，FNV-1a 哈希；同时判断是不是纯色。两侧边缘不算
-    private static func lines(of frame: PixelFrame, axis: ScrollAxis, span: Range<Int>) -> [Line] {
-        let w = frame.width, h = frame.height, bpr = frame.bytesPerRow
+    /// 每一行的指纹。像素按 32 位整数读，FNV-1a 哈希；同时判断是不是纯色。两侧边缘（span 以外）不算
+    private static func lines(of frame: PixelFrame, span xs: Range<Int>) -> [Line] {
+        let h = frame.height, bpr = frame.bytesPerRow
         let offsetBasis: UInt64 = 0xcbf2_9ce4_8422_2325, prime: UInt64 = 0x0000_0100_0000_01b3
         return frame.data.withUnsafeBytes { raw -> [Line] in
             guard let base = raw.baseAddress else { return [] }
             func pixel(_ x: Int, _ y: Int) -> UInt32 { base.loadUnaligned(fromByteOffset: y * bpr + x * 4, as: UInt32.self) }
-            func near(_ a: UInt32, _ b: UInt32) -> Bool {
-                // 每个通道相差不超过 6：抗锯齿、细微渐变也算「几乎纯色」
-                for shift in stride(from: 0, to: 24, by: 8) {
-                    let ca = Int((a >> UInt32(shift)) & 0xff), cb = Int((b >> UInt32(shift)) & 0xff)
-                    if abs(ca - cb) > 6 { return false }
+            return (0..<h).map { y in
+                var hash = offsetBasis
+                let firstPixel = pixel(xs.lowerBound, y)
+                var flat = true
+                for x in xs {
+                    let p = pixel(x, y)
+                    hash = (hash ^ UInt64(p)) &* prime
+                    if flat, !Self.near(p, firstPixel) { flat = false }   // 抗锯齿、细微渐变也算「几乎纯色」
                 }
-                return true
-            }
-            switch axis {
-            case .vertical:
-                let xs = span
-                return (0..<h).map { y in
-                    var hash = offsetBasis
-                    let firstPixel = pixel(xs.lowerBound, y)
-                    var flat = true
-                    for x in xs {
-                        let p = pixel(x, y)
-                        hash = (hash ^ UInt64(p)) &* prime
-                        if flat, p != firstPixel, !near(p, firstPixel) { flat = false }
-                    }
-                    return Line(hash: hash, flat: flat)
-                }
-            case .horizontal:
-                // 按行遍历、同时更新每一列的哈希（顺序读内存，比逐列跳着读快）
-                let ys = span
-                var hashes = [UInt64](repeating: offsetBasis, count: w)
-                var flat = [Bool](repeating: true, count: w)
-                let firstRow = (0..<w).map { pixel($0, ys.lowerBound) }
-                for y in ys {
-                    for x in 0..<w {
-                        let p = pixel(x, y)
-                        hashes[x] = (hashes[x] ^ UInt64(p)) &* prime
-                        if flat[x], p != firstRow[x], !near(p, firstRow[x]) { flat[x] = false }
-                    }
-                }
-                return (0..<w).map { Line(hash: hashes[$0], flat: flat[$0]) }
+                return Line(hash: hash, flat: flat)
             }
         }
     }
 
-    /// 每一行（或每一列）的亮度轮廓。隔一个像素取一个（容差比对用不着每个像素），两侧边缘不算
-    private static func profiles(of frame: PixelFrame, axis: ScrollAxis, span: Range<Int>) -> [Profile] {
-        let w = frame.width, h = frame.height, bpr = frame.bytesPerRow
+    /// 每一行的亮度轮廓。隔一个像素取一个（容差比对用不着每个像素），两侧边缘不算
+    private static func profiles(of frame: PixelFrame, span: Range<Int>) -> [Profile] {
+        let h = frame.height, bpr = frame.bytesPerRow
         return frame.data.withUnsafeBytes { raw -> [Profile] in
             guard let base = raw.baseAddress else { return [] }
             // 亮度（近似 0.25 R + 0.625 G + 0.125 B）
@@ -581,15 +624,14 @@ struct ScrollStitcher {
             let segments: [(start: Int, end: Int)] = (0..<16).map {
                 (offset + $0 * count / 16, offset + max($0 * count / 16 + 1, ($0 + 1) * count / 16))
             }
-            let lines = axis == .vertical ? h : w
-            var result = [Profile](repeating: Profile(), count: lines)
-            for line in 0..<lines {
+            var result = [Profile](repeating: Profile(), count: h)
+            for line in 0..<h {
                 var profile = Profile()
                 for (b, segment) in segments.enumerated() {
                     var sum: Float = 0, samples: Float = 0
                     var k = segment.start
                     while k < min(segment.end, offset + count) {
-                        sum += axis == .vertical ? luma(k, line) : luma(line, k)
+                        sum += luma(k, line)
                         samples += 1
                         k += 2
                     }
@@ -635,8 +677,8 @@ struct ScrollStitcher {
     /// 3. 对这几个逐个按像素核对，取最像的：要足够像，而且明显比其他候选像，否则返回 nil
     /// 有滚轮提示时只在提示附近找（快、也不容易被重复的花纹骗）
     private static func tolerantShift(previous: (lines: [Line], profiles: [Profile]), current: (lines: [Line], profiles: [Profile]),
-                                      prior: Int?, frames: (previous: PixelFrame, current: PixelFrame), axis: ScrollAxis,
-                                      span: Range<Int>, inner: Range<Int>?) -> Int? {
+                                      prior: Int?, frames: (previous: PixelFrame, current: PixelFrame),
+                                      span: Range<Int>, inner: Range<Int>?, maxCost: Float = Tuning.maxCost) -> Int? {
         let n = current.lines.count
         guard n == previous.lines.count, n == current.profiles.count, n == previous.profiles.count else { return nil }
         let minOverlap = max(8, n / 8)
@@ -653,27 +695,13 @@ struct ScrollStitcher {
                 let sampleStep = max(1, span.count / 240)
                 /// 上一帧第 j 行和当前帧第 i 行的平均像素差（每个通道 0~255，取三个通道的平均）
                 func pixelDistance(_ j: Int, _ i: Int) -> Float {
-                    var total = 0, count = 0
-                    var x = span.lowerBound
-                    while x < span.upperBound {
-                        let (po, co) = axis == .vertical ? (j * bpr + x * 4, i * bpr + x * 4) : (x * bpr + j * 4, x * bpr + i * 4)
-                        let p = pb.loadUnaligned(fromByteOffset: po, as: UInt32.self)
-                        let q = cb.loadUnaligned(fromByteOffset: co, as: UInt32.self)
-                        if p != q {
-                            for shift in stride(from: 0, to: 24, by: 8) {
-                                total += abs(Int((p >> UInt32(shift)) & 0xff) - Int((q >> UInt32(shift)) & 0xff))
-                            }
-                        }
-                        count += 1
-                        x += sampleStep
-                    }
-                    return count == 0 ? 0 : Float(total) / Float(count * 3)
+                    Self.lineDifference(pb, j, cb, i, bytesPerRow: bpr, span: span, step: sampleStep)
                 }
                 // 原位置几乎没变 → 没有滚动。按「真正变了的行有多少」判断，不按平均差别：
                 // 选区里不动的部分占大头时（框了整个屏幕、只有中间一栏在滚），平均下来差别很小，会把真实的滚动当成没变
-                let changedRows = usable.filter { pixelDistance($0, $0) > 1.2 }.count
+                let changedRows = usable.filter { pixelDistance($0, $0) > Tuning.unchangedLine }.count
                 if changedRows < max(3, usable.count / 50) { return 0 }
-                let fixed = (0..<n).map { current.lines[$0].flat || pixelDistance($0, $0) <= 1.2 }
+                let fixed = (0..<n).map { current.lines[$0].flat || pixelDistance($0, $0) <= Tuning.unchangedLine }
 
                 let cur = current.profiles, prev = previous.profiles
                 func distance(_ a: Profile, _ b: Profile) -> Float {
@@ -737,21 +765,21 @@ struct ScrollStitcher {
                     guard let inner else { return nil }
                     let rows = usable.filter { inner.contains($0) }
                     guard !rows.isEmpty else { return nil }
-                    let unchanged = rows.filter { pixelDistance($0, $0) <= 1.2 }.count
+                    let unchanged = rows.filter { pixelDistance($0, $0) <= Tuning.unchangedLine }.count
                     return unchanged * 2 >= rows.count ? 0 : nil
                 }()
-                guard let best = refined.first, best.cost <= 6 else { return localChange }
+                guard let best = refined.first, best.cost <= maxCost else { return localChange }
                 // 和刚才的滚动一致的那个距离，如果几乎和最好的一样好，就选它：列表、聊天记录里相似的内容很多，
                 // 别的距离可能凑巧更像一点；真的一下滚了很远时，小距离会对得很差，不会被选中
                 if let prior, prior != 0 {
                     let tolerance = max(24, abs(prior) / 2)
-                    if let near = refined.first(where: { abs($0.d - prior) <= tolerance }), near.cost <= 6,
-                       near.cost <= best.cost * 1.3 + 0.5 {
+                    if let near = refined.first(where: { abs($0.d - prior) <= tolerance }), near.cost <= maxCost,
+                       near.cost <= best.cost * Tuning.priorSlack.ratio + Tuning.priorSlack.extra {
                         return near.d
                     }
                 }
                 let second = refined.dropFirst().first { abs($0.d - best.d) > 2 }?.cost ?? .infinity
-                guard second >= best.cost * 1.6 + 1 else { return localChange }
+                guard second >= best.cost * Tuning.clearlyBetter.ratio + Tuning.clearlyBetter.extra else { return localChange }
                 return best.d
             }
         }
@@ -768,7 +796,7 @@ struct ScrollStitcher {
             considered += 1
             if line == previous[i + d] { matched += 1 }
         }
-        return considered >= 3 && Double(matched) >= Double(considered) * 0.85
+        return considered >= 3 && Double(matched) >= Double(considered) * Tuning.exactMatchFraction
     }
 
     /// 大部分行和上一帧原位置相同（没有滚动，只是局部变化）
@@ -800,7 +828,7 @@ struct ScrollStitcher {
     /// 和原位置不一样。只看「和滚动前的位置对不对得上」不够：每帧只滚几个像素时，栏里文字相邻的几行本来就很像，也对得上，
     /// 会被当成正文，每一帧在长图里留下一条。两种都很像的（空白）不算数；连续 3 行明确跟着滚动就到头了。最多占三分之一
     private static func unmovedTop(_ previous: PixelFrame, _ current: PixelFrame, previousLines: [Line], currentLines: [Line],
-                                   shift d: Int, axis: ScrollAxis, span: Range<Int>) -> Int {
+                                   shift d: Int, span: Range<Int>) -> Int {
         let n = currentLines.count
         let begin = max(0, -d), end = min(n / 3, n - d)
         guard begin < end else { return 0 }
@@ -811,21 +839,7 @@ struct ScrollStitcher {
                 let step = max(1, span.count / 240)
                 /// 当前帧第 i 行和上一帧第 j 行的平均像素差（每个通道 0~255）
                 func distance(_ i: Int, _ j: Int) -> Float {
-                    var total = 0, count = 0
-                    var x = span.lowerBound
-                    while x < span.upperBound {
-                        let (po, co) = axis == .vertical ? (j * bpr + x * 4, i * bpr + x * 4) : (x * bpr + j * 4, x * bpr + i * 4)
-                        let p = pb.loadUnaligned(fromByteOffset: po, as: UInt32.self)
-                        let q = cb.loadUnaligned(fromByteOffset: co, as: UInt32.self)
-                        if p != q {
-                            for shift in stride(from: 0, to: 24, by: 8) {
-                                total += abs(Int((p >> UInt32(shift)) & 0xff) - Int((q >> UInt32(shift)) & 0xff))
-                            }
-                        }
-                        count += 1
-                        x += step
-                    }
-                    return count == 0 ? 0 : Float(total) / Float(count * 3)
+                    Self.lineDifference(pb, j, cb, i, bytesPerRow: bpr, span: span, step: step)
                 }
                 var header = 0, run = 0, i = begin
                 while i < end {
@@ -835,11 +849,11 @@ struct ScrollStitcher {
                     }
                     let moved = currentLines[i] == previousLines[i + d] ? 0 : distance(i, i + d)
                     let stayed = currentLines[i] == previousLines[i] ? 0 : distance(i, i)
-                    if moved <= 2, stayed > moved + 1 {
+                    if moved <= Tuning.barLineMatch, stayed > moved + 1 {
                         // 明确跟着滚动了：正文
                         run += 1
-                        if run == 3 { break }
-                    } else if stayed <= moved || moved > 2 {
+                        if run == Tuning.barEndRun { break }
+                    } else if stayed <= moved || moved > Tuning.barLineMatch {
                         // 不动（或者只差一点点），或者和滚动前的位置对不上：栏
                         run = 0
                         header = i + 1
@@ -866,14 +880,14 @@ struct ScrollStitcher {
 
     // MARK: - 像素
 
-    /// 把一帧里的若干行（横向时是若干列）复制到内容的第 at 行起（覆盖或接在末尾）
+    /// 把一帧里的若干行复制到内容的第 at 行起（覆盖或接在末尾）
     /// - Parameters:
     ///   - only: 只复制每一行的这一段（滚动的那一段）；nil 表示整行
     ///   - fill: 和 only 一起用：这一段以外填这些颜色（边栏往下延伸的部分）；nil 表示不动原来的内容
-    private static func copy(_ frame: PixelFrame, axis: ScrollAxis, lines range: Range<Int>, into content: inout Data, at index: Int,
+    private static func copy(_ frame: PixelFrame, lines range: Range<Int>, into content: inout Data, at index: Int,
                              only: Range<Int>? = nil, fill: [UInt32]? = nil) {
         guard !range.isEmpty else { return }
-        let cross = axis == .vertical ? frame.width : frame.height
+        let cross = frame.width
         let lineBytes = cross * 4
         let needed = (index + range.count) * lineBytes
         if content.count < needed { content.append(Data(count: needed - content.count)) }
@@ -892,32 +906,26 @@ struct ScrollStitcher {
                             (target + part.upperBound).update(from: f + part.upperBound, count: cross - part.upperBound)
                         }
                     }
-                    switch axis {
-                    case .vertical:
-                        memcpy(target + part.lowerBound, s + line * bpr + part.lowerBound * 4, part.count * 4)
-                    case .horizontal:
-                        // 每一列的像素连续存放（转置），拼好后再转回来
-                        for y in part { target[y] = s.loadUnaligned(fromByteOffset: y * bpr + line * 4, as: UInt32.self) }
-                    }
+                    memcpy(target + part.lowerBound, s + line * bpr + part.lowerBound * 4, part.count * 4)
                 }
             }
         }
     }
 
-    /// 两帧之间变了的那一段（沿每一行的方向）：竖向时是哪些列有变化，横向时是哪些行有变化；没变化返回 nil
+    /// 两帧之间变了的那一段：哪些列有变化；没变化返回 nil
     /// 两帧之间真正在滚动的那一段（沿每一行）。
     /// 变了的位置先分成几段（中间隔着一截没变的）：最宽的一段是正文，用它算出滚动距离；
     /// 其他段只有「也按同样的距离移动」才算在滚动的范围里——边栏里转圈的图标、闪烁的光标、刷新的数字
     /// 虽然也在变，但不是跟着滚动，不能因为它们就把整个边栏当成正文（否则边栏会被一段段重复拼上去）
     private func scrollingSpan(_ previous: PixelFrame, _ frame: PixelFrame) -> Range<Int>? {
-        let runs = Self.changedRuns(previous, frame, axis: axis)
+        let runs = Self.changedRuns(previous, frame)
         guard let main = runs.max(by: { $0.count < $1.count }) else { return nil }
         guard runs.count > 1 else { return main }
-        let mainPrevious = Self.lines(of: previous, axis: axis, span: main), mainCurrent = Self.lines(of: frame, axis: axis, span: main)
+        let mainPrevious = Self.lines(of: previous, span: main), mainCurrent = Self.lines(of: frame, span: main)
         guard let d = Self.shift(from: mainPrevious, to: mainCurrent), d != 0 else { return main }
         var low = main.lowerBound, high = main.upperBound
         for run in runs where run != main {
-            let a = Self.lines(of: previous, axis: axis, span: run), b = Self.lines(of: frame, axis: axis, span: run)
+            let a = Self.lines(of: previous, span: run), b = Self.lines(of: frame, span: run)
             let n = b.count
             var moved = 0, considered = 0
             for i in max(0, -d)..<min(n, n - d) where !b[i].flat || !a[i + d].flat {
@@ -934,9 +942,9 @@ struct ScrollStitcher {
     }
 
     /// 两帧之间变了的位置，分成一段一段（相隔不到 12 个像素的并成一段）
-    private static func changedRuns(_ a: PixelFrame, _ b: PixelFrame, axis: ScrollAxis) -> [Range<Int>] {
+    private static func changedRuns(_ a: PixelFrame, _ b: PixelFrame) -> [Range<Int>] {
         let w = a.width, h = a.height
-        let cross = axis == .vertical ? w : h
+        let cross = w
         var changed = [Bool](repeating: false, count: cross)
         a.data.withUnsafeBytes { ra in
             b.data.withUnsafeBytes { rb in
@@ -944,10 +952,6 @@ struct ScrollStitcher {
                 for y in 0..<h {
                     let rowA = pa + y * a.bytesPerRow, rowB = pb + y * b.bytesPerRow
                     guard memcmp(rowA, rowB, w * 4) != 0 else { continue }
-                    if axis == .horizontal {
-                        changed[y] = true
-                        continue
-                    }
                     for x in 0..<w where !changed[x] {
                         if rowA.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self)
                             != rowB.loadUnaligned(fromByteOffset: x * 4, as: UInt32.self) { changed[x] = true }
@@ -971,16 +975,16 @@ struct ScrollStitcher {
     }
 
     /// 边栏的背景色：滚动的那一段以外，每个位置取出现最多的颜色（隔一个像素取样）
-    private static func sideFill(of frame: PixelFrame, axis: ScrollAxis, band: Range<Int>) -> [UInt32] {
-        let cross = axis == .vertical ? frame.width : frame.height
-        let along = axis == .vertical ? frame.height : frame.width
+    private static func sideFill(of frame: PixelFrame, band: Range<Int>) -> [UInt32] {
+        let cross = frame.width
+        let along = frame.height
         return frame.data.withUnsafeBytes { raw -> [UInt32] in
             guard let base = raw.baseAddress else { return [] }
             return (0..<cross).map { c in
                 guard !band.contains(c) else { return 0 }
                 var counts: [UInt32: Int] = [:]
                 for k in stride(from: 0, to: along, by: 2) {
-                    let (x, y) = axis == .vertical ? (c, k) : (k, c)
+                    let (x, y) = (c, k)
                     counts[base.loadUnaligned(fromByteOffset: y * frame.bytesPerRow + x * 4, as: UInt32.self), default: 0] += 1
                 }
                 return counts.max { $0.value < $1.value }?.key ?? 0
@@ -988,27 +992,11 @@ struct ScrollStitcher {
         }
     }
 
-    /// 内容（count 行，每行 cross 像素）做成图；横向时把按列存放的像素转回按行
-    private static func image(lines data: Data, count: Int, cross: Int, axis: ScrollAxis, colorSpace: CGColorSpace) -> CGImage? {
+    /// 内容（count 行，每行 cross 像素）做成图
+    private static func image(lines data: Data, count: Int, cross: Int, colorSpace: CGColorSpace) -> CGImage? {
         guard count > 0, cross > 0 else { return nil }
-        switch axis {
-        case .vertical:
-            return makeCGImage(width: cross, height: count, bytesPerRow: cross * 4, data: data.prefix(count * cross * 4),
-                               colorSpace: colorSpace)
-        case .horizontal:
-            var rows = Data(count: count * cross * 4)
-            rows.withUnsafeMutableBytes { out in
-                data.withUnsafeBytes { src in
-                    guard let dst = out.baseAddress?.assumingMemoryBound(to: UInt32.self),
-                          let s = src.baseAddress?.assumingMemoryBound(to: UInt32.self) else { return }
-                    for x in 0..<count {
-                        let column = s + x * cross
-                        for y in 0..<cross { dst[y * count + x] = column[y] }
-                    }
-                }
-            }
-            return makeCGImage(width: count, height: cross, bytesPerRow: count * 4, data: rows, colorSpace: colorSpace)
-        }
+        return makeCGImage(width: cross, height: count, bytesPerRow: cross * 4, data: data.prefix(count * cross * 4),
+                           colorSpace: colorSpace)
     }
 
     private static func image(of frame: PixelFrame) -> CGImage? {

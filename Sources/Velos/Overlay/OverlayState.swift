@@ -27,6 +27,8 @@ struct OverlayState {
     var regionStyle: RegionStyle = .selection
     /// 区域的像素尺寸（用于显示「1280 × 720」）
     var regionPixelSize: CGSize?
+    /// 选区的圆角（点）：蒙版挖的洞和边框都画成圆角，所见即所得
+    var cornerRadius: CGFloat = 0
 }
 
 /// 遮罩窗口把鼠标、键盘事件转交给会话处理（坐标统一为 AppKit 全局坐标）

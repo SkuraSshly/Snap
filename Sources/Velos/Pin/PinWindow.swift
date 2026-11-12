@@ -2,6 +2,11 @@ import AppKit
 import Carbon.HIToolbox
 import UniformTypeIdentifiers
 
+/// 很长（或很宽）的图的方向：钉图时按它滚动查看
+enum ScrollAxis: Sendable {
+    case vertical, horizontal
+}
+
 /// 钉在屏幕上的截图：置顶的浮动小窗。
 /// - 单击选中（杏色边框），选中后按 Esc 关闭、⌘C 复制；双击直接关闭
 /// - 拖动移动；滚轮 / 触控板双指捏合缩放（以鼠标位置为中心）

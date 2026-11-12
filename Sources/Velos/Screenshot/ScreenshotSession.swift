@@ -44,6 +44,19 @@ final class ScreenshotSession: OverlayEventHandler {
 
     /// 标注：工具栏在选区旁（全屏模式在屏幕底部中央）；标注画在冻结底图上，选区只决定最后裁剪哪一块
     private let toolbar = AnnotationToolbar(showsLongCapture: true)
+    /// 选区左上角、尺寸标签右边的圆角拉条
+    private lazy var cornerBar: CornerRadiusBar = {
+        let bar = CornerRadiusBar(radius: CGFloat(Preferences.shared.screenshotCornerRadius))
+        bar.onChange = { [weak self] radius in
+            Preferences.shared.screenshotCornerRadius = Double(radius)
+            self?.refresh()
+        }
+        return bar
+    }()
+    /// 截图的圆角（点）：只对拖出来、单击选中的选区生效（全屏、只悬停识别的窗口不切圆角）
+    private var cornerRadius: CGFloat {
+        mode == .region && selector.selection != nil && !isTranslating ? cornerBar.radius : 0
+    }
     private var annotator: AnnotationController?
     private var annotatorDisplayID: CGDirectDisplayID?
 
@@ -317,7 +330,10 @@ final class ScreenshotSession: OverlayEventHandler {
             // 没有标注：直接裁剪原图，像素原封不动
             image = target.rect == frozen.screen.frame ? frozen.image : frozen.crop(target.rect)
         }
-        guard let image else { return nil }
+        guard var image else { return nil }
+        // 圆角：和选区上看到的一样（选区很小时圆角不超过短边的一半）
+        let radius = min(cornerRadius, target.rect.width / 2, target.rect.height / 2)
+        if radius > 0, let rounded = ImageEncoder.rounded(image, radius: radius * frozen.scale) { image = rounded }
         return FrozenDisplay.Crop(image: image, scale: frozen.scale, sourceRect: target.rect)
     }
 
@@ -386,6 +402,16 @@ final class ScreenshotSession: OverlayEventHandler {
     /// 工具栏位置：区域模式在选区下方右对齐（放不下就放上方，再不行放选区内）；全屏模式在屏幕底部中央
     private func updateToolbar() {
         // 截屏翻译没有标注工具栏
+        // 圆角拉条：区域模式、有选区时挂在选区所在屏幕的遮罩上（跟着尺寸标签摆放）
+        for (id, window) in overlays {
+            guard let overlay = window.contentView as? OverlayView else { continue }
+            let wantsBar = !isTranslating && mode == .region && selector.selection != nil && selector.selectionDisplayID == id
+            if wantsBar, overlay.accessory !== cornerBar {
+                overlay.accessory = cornerBar
+            } else if !wantsBar, overlay.accessory === cornerBar {
+                overlay.accessory = nil
+            }
+        }
         if isTranslating {
             toolbar.removeFromSuperview()
             return
@@ -462,6 +488,7 @@ final class ScreenshotSession: OverlayEventHandler {
                 }
                 if let region = state.region {
                     state.regionPixelSize = CGSize(width: region.width * frozen.scale, height: region.height * frozen.scale)
+                    state.cornerRadius = cornerRadius
                     let origin = frozen.screen.frame.origin
                     state.region = region.offsetBy(dx: -origin.x, dy: -origin.y)
                 }
@@ -595,9 +622,14 @@ final class ScreenshotSession: OverlayEventHandler {
     // MARK: - OverlayEventHandler：鼠标
 
     func overlayCursor(at point: NSPoint) -> NSCursor {
-        // 工具栏上是箭头
-        if let view = toolbar.superview, let window = view.window,
-           toolbar.frame.contains(view.convert(window.convertPoint(fromScreen: point), from: nil)) {
+        // 工具栏、圆角拉条上：拉条按拉条的规则（白点上是左右小三角），其他地方是箭头
+        for control in [toolbar, cornerBar] as [NSView] where !control.isHidden {
+            guard let view = control.superview, let window = view.window else { continue }
+            let local = view.convert(window.convertPoint(fromScreen: point), from: nil)
+            guard control.frame.contains(local) else { continue }
+            if let slider = control.hitTest(local) as? ValueSlider {
+                return slider.cursor(at: slider.convert(local, from: view))
+            }
             return .arrow
         }
         // 调色盘开着时是箭头（点调色盘外面只是关掉它）
@@ -739,6 +771,9 @@ final class ScreenshotSession: OverlayEventHandler {
     var debugAnnotator: AnnotationController? { annotator }
     var debugOverlayLevel: Int { overlays[activeDisplayID]?.level.rawValue ?? -1 }
     var debugToolbar: AnnotationToolbar { toolbar }
+    var debugCornerBar: CornerRadiusBar { cornerBar }
+    /// 自测：现在按 Enter 会得到的图
+    func debugResultImage() -> CGImage? { makeResult()?.image }
     func debugToolbarRefresh() { updateToolbar() }
     func debugSelectTool(_ tool: AnnotationTool?) { selectTool(tool) }
     /// 自测用：所有工具都设成这个样式

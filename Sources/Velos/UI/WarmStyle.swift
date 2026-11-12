@@ -19,6 +19,13 @@ struct WarmPalette {
 
     /// 杏色：选中的工具、「完成」按钮
     static let apricot = NSColor(srgbRed: 0.96, green: 0.58, blue: 0.36, alpha: 1)
+    /// 深一点的杏色：自绘光标的细边，浅色背景上也有清楚的轮廓
+    static let apricotEdge = NSColor(srgbRed: 0.80, green: 0.42, blue: 0.22, alpha: 1)
+    /// 浅杏色和它的细边：调整大小光标里朝里的那个小三角
+    static let apricotPale = NSColor(srgbRed: 0.99, green: 0.84, blue: 0.73, alpha: 1)
+    static let apricotPaleEdge = NSColor(srgbRed: 0.90, green: 0.66, blue: 0.52, alpha: 1)
+    /// 可可色：浅色模式的正文、移动光标的圆心
+    static let cocoa = NSColor(srgbRed: 0.33, green: 0.24, blue: 0.18, alpha: 1)
     /// 珊瑚红：「开始录制」
     static let coral = NSColor(srgbRed: 0.93, green: 0.37, blue: 0.30, alpha: 1)
 

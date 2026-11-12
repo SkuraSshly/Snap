@@ -186,6 +186,17 @@ enum DebugUITest {
         check("拖出新选区", local(selector.selection) == CGRect(x: 100, y: 100, width: 200, height: 150),
               "\(String(describing: local(selector.selection)))")
         render("5-选区与控制点")
+        // 圆角：选好区域后，尺寸标签右边出现圆角拉条；调大后选区和截出来的图都是圆角（四角透明），调回直角
+        let cornerBar = session.debugCornerBar
+        check("选好区域后显示圆角拉条", cornerBar.superview != nil && !cornerBar.isHidden)
+        cornerBar.debugSet(12)
+        render("5c-圆角选区")
+        let roundedResult = session.debugResultImage()
+        check("圆角 12：截出来的图四角透明、中间不透明",
+              roundedResult.map { ImageEncoder.hasTransparentCorner($0) } == true
+              && roundedResult.map { $0.width == Int(200 * session.debugScale) } == true)
+        cornerBar.debugSet(0)
+        check("圆角调回 0：截出来的图是直角", session.debugResultImage().map { !ImageEncoder.hasTransparentCorner($0) } == true)
         try? await Task.sleep(for: .milliseconds(200))
         await captureComposite(around: CGRect(x: g(60, 60).x, y: g(60, 60).y, width: 300, height: 240),
                                to: dir.appendingPathComponent("5b-选区与尺寸标签实际显示.png"))
@@ -953,48 +964,44 @@ enum DebugUITest {
             }
         }
         let space = CGColorSpace(name: CGColorSpace.sRGB)!
-        func frame(_ lines: [[UInt32]], cross: Int, axis: ScrollAxis) -> PixelFrame {
-            let n = lines.count
-            let (w, h) = axis == .vertical ? (cross, n) : (n, cross)
+        func frame(_ lines: [[UInt32]], cross: Int) -> PixelFrame {
+            let (w, h) = (cross, lines.count)
             var data = Data(count: w * h * 4)
             data.withUnsafeMutableBytes { raw in
                 let p = raw.bindMemory(to: UInt32.self)
-                for y in 0..<h { for x in 0..<w { p[y * w + x] = axis == .vertical ? lines[y][x] : lines[x][y] } }
+                for y in 0..<h { for x in 0..<w { p[y * w + x] = lines[y][x] } }
             }
             return PixelFrame(width: w, height: h, bytesPerRow: w * 4, data: data, colorSpace: space)
         }
-        func lines(of image: CGImage, cross: Int, axis: ScrollAxis) -> [[UInt32]] {
+        func lines(of image: CGImage, cross: Int) -> [[UInt32]] {
             guard let f = PixelFrame(image: image, colorSpace: space) else { return [] }
             return f.data.withUnsafeBytes { raw in
                 let p = raw.bindMemory(to: UInt32.self)
-                let n = axis == .vertical ? f.height : f.width
-                return (0..<n).map { i in (0..<cross).map { j in axis == .vertical ? p[i * f.width + j] : p[j * f.width + i] } }
+                return (0..<f.height).map { i in (0..<cross).map { j in p[i * f.width + j] } }
             }
         }
 
-        // 1. 拼接算法：竖向、横向各一遍
+        // 1. 拼接算法
         let cross = 120, header = 20, footer = 30, viewport = 300, area = 250
         let page = content(1600, cross, seed: 7)
         let top = content(header, cross, seed: 99).map { $0.map { $0 ^ 0x0012_3456 } }
         let bottom = content(footer, cross, seed: 55).map { $0.map { $0 ^ 0x0065_4321 } }
         func view(_ pos: Int) -> [[UInt32]] { top + Array(page[pos..<(pos + area)]) + bottom }
-        _ = viewport
-        for axis in [ScrollAxis.vertical, .horizontal] {
-            let tag = axis == .vertical ? "竖向" : "横向"
-            var s = ScrollStitcher(axis: axis)
+        do {
+            var s = ScrollStitcher()
             var events: [ScrollStitcher.Event] = []
-            for pos in [0, 0, 40, 90, 60, 150, 500, 330] { events.append(s.add(frame(view(pos), cross: cross, axis: axis))) }
-            check("长截图\(tag)：开始、不动、接上、往回滚不重复、滚太远对不上、回来继续",
+            for pos in [0, 0, 40, 90, 60, 150, 500, 330] { events.append(s.add(frame(view(pos), cross: cross))) }
+            check("长截图：开始、不动、接上、往回滚不重复、滚太远对不上、回来继续",
                   events == [.started, .unchanged, .appended(40), .appended(50), .moved, .appended(60), .lost, .appended(180)],
                   "\(events)")
-            for pos in stride(from: 400, through: 1200, by: 70) { s.add(frame(view(pos), cross: cross, axis: axis)) }
+            for pos in stride(from: 400, through: 1200, by: 70) { s.add(frame(view(pos), cross: cross)) }
             let expected = top + Array(page[0..<(1170 + area)]) + bottom
-            let got = s.makeImage().map { lines(of: $0, cross: cross, axis: axis) } ?? []
-            check("长截图\(tag)：结果与原页面逐像素一致，底部输入框只出现一次", got == expected, "\(got.count) / \(expected.count) 行")
-            var limited = ScrollStitcher(axis: axis, maxLength: 600)
-            var last = limited.add(frame(view(0), cross: cross, axis: axis))
-            for pos in stride(from: 60, through: 900, by: 60) { last = limited.add(frame(view(pos), cross: cross, axis: axis)) }
-            check("长截图\(tag)：到长度上限停止", last == .limitReached && limited.length == 600, "\(last) \(limited.length)")
+            let got = s.makeImage().map { lines(of: $0, cross: cross) } ?? []
+            check("长截图：结果与原页面逐像素一致，底部输入框只出现一次", got == expected, "\(got.count) / \(expected.count) 行")
+            var limited = ScrollStitcher(maxLength: 600)
+            var last = limited.add(frame(view(0), cross: cross))
+            for pos in stride(from: 60, through: 900, by: 60) { last = limited.add(frame(view(pos), cross: cross)) }
+            check("长截图：到长度上限停止", last == .limitReached && limited.length == 600, "\(last) \(limited.length)")
         }
 
         // 容差：每帧随机抖动一些像素（模拟滚动时抗锯齿的细微差别），精确比对全部失效，靠亮度轮廓接上
@@ -1010,19 +1017,18 @@ enum DebugUITest {
             }
             return PixelFrame(width: f.width, height: f.height, bytesPerRow: f.bytesPerRow, data: data, colorSpace: f.colorSpace)
         }
-        for axis in [ScrollAxis.vertical, .horizontal] {
-            let tag = axis == .vertical ? "竖向" : "横向"
-            var s = ScrollStitcher(axis: axis)
+        do {
+            var s = ScrollStitcher()
             var events: [ScrollStitcher.Event] = []
             for (k, pos) in [0, 0, 40, 90, 60, 150, 330].enumerated() {
-                events.append(s.add(jittered(frame(view(pos), cross: cross, axis: axis), seed: UInt32(k + 1))))
+                events.append(s.add(jittered(frame(view(pos), cross: cross), seed: UInt32(k + 1))))
             }
-            check("长截图\(tag)：像素有细微差别也能接上", events == [.started, .unchanged, .appended(40), .appended(50), .moved,
+            check("长截图：像素有细微差别也能接上", events == [.started, .unchanged, .appended(40), .appended(50), .moved,
                                                          .appended(60), .appended(180)], "\(events)")
-            var big = ScrollStitcher(axis: axis)
-            big.add(jittered(frame(view(0), cross: cross, axis: axis), seed: 9))
-            let e = big.add(jittered(frame(view(120), cross: cross, axis: axis), seed: 10))
-            check("长截图\(tag)：一下滚得较远、像素有细微差别也能接上（只看画面）", e == .appended(120), "\(e)")
+            var big = ScrollStitcher()
+            big.add(jittered(frame(view(0), cross: cross), seed: 9))
+            let e = big.add(jittered(frame(view(120), cross: cross), seed: 10))
+            check("长截图：一下滚得较远、像素有细微差别也能接上（只看画面）", e == .appended(120), "\(e)")
         }
 
         // 滚动条：每帧右侧有个跟着移动的滑块，比对时忽略右边缘，照常精确接上；结果右边缘以外和原页面一致
@@ -1039,25 +1045,24 @@ enum DebugUITest {
             for i in (header + area - 40)..<(header + area) { lines[i] = [UInt32](repeating: 0xFFFF_FFFF, count: cross) }
             return lines
         }
-        for axis in [ScrollAxis.vertical, .horizontal] {
-            let tag = axis == .vertical ? "竖向" : "横向"
-            var s = ScrollStitcher(axis: axis, edgeMargin: (0, 16))
+        do {
+            var s = ScrollStitcher(edgeMargin: (0, 16))
             var events: [ScrollStitcher.Event] = []
             for (k, pos) in [0, 40, 90, 150, 330].enumerated() {
-                events.append(s.add(frame(withScrollbar(view(pos), knobAt: 20 + k * 30), cross: cross, axis: axis)))
+                events.append(s.add(frame(withScrollbar(view(pos), knobAt: 20 + k * 30), cross: cross)))
             }
             let trimmed = (top + Array(page[0..<(330 + area)]) + bottom).map { Array($0[0..<(cross - 16)]) }
-            let got = s.makeImage().map { lines(of: $0, cross: cross, axis: axis).map { Array($0[0..<(cross - 16)]) } } ?? []
-            check("长截图\(tag)：滚动条在动也照常接上，内容一致", events == [.started, .appended(40), .appended(50), .appended(60), .appended(180)]
+            let got = s.makeImage().map { lines(of: $0, cross: cross).map { Array($0[0..<(cross - 16)]) } } ?? []
+            check("长截图：滚动条在动也照常接上，内容一致", events == [.started, .appended(40), .appended(50), .appended(60), .appended(180)]
                   && got == trimmed, "\(events)")
-            var r = ScrollStitcher(axis: axis)
-            r.add(frame(view(0), cross: cross, axis: axis))
+            var r = ScrollStitcher()
+            r.add(frame(view(0), cross: cross))
             for pos in stride(from: 60, through: 600, by: 60) {
-                r.add(frame(unrendered(pos), cross: cross, axis: axis))
-                r.add(frame(view(pos), cross: cross, axis: axis))
+                r.add(frame(unrendered(pos), cross: cross))
+                r.add(frame(view(pos), cross: cross))
             }
-            let full = r.makeImage().map { lines(of: $0, cross: cross, axis: axis) } ?? []
-            check("长截图\(tag)：刚滚到时没画完的部分，画好后自动换上", full == top + Array(page[0..<(600 + area)]) + bottom)
+            let full = r.makeImage().map { lines(of: $0, cross: cross) } ?? []
+            check("长截图：刚滚到时没画完的部分，画好后自动换上", full == top + Array(page[0..<(600 + area)]) + bottom)
         }
 
         // 两侧不动的边栏：左 20、右 15 像素不滚动，只有中间在滚；边栏只出现在第一屏，往下用背景色延伸
@@ -1065,17 +1070,16 @@ enum DebugUITest {
         func withSides(_ pos: Int) -> [[UInt32]] {
             view(pos).enumerated().map { i, line in sideL[i] + Array(line[20..<(cross - 15)]) + sideR[i] }
         }
-        for axis in [ScrollAxis.vertical, .horizontal] {
-            let tag = axis == .vertical ? "竖向" : "横向"
-            var s = ScrollStitcher(axis: axis)
+        do {
+            var s = ScrollStitcher()
             var events: [ScrollStitcher.Event] = []
-            for pos in [0, 40, 90, 150, 330] { events.append(s.add(frame(withSides(pos), cross: cross, axis: axis))) }
+            for pos in [0, 40, 90, 150, 330] { events.append(s.add(frame(withSides(pos), cross: cross))) }
             let white = [UInt32](repeating: 0xFFFF_FFFF, count: 20), whiteR = [UInt32](repeating: 0xFFFF_FFFF, count: 15)
             let expected = Array(withSides(0)[0..<(header + area)])
                 + page[area..<(330 + area)].map { white + Array($0[20..<(cross - 15)]) + whiteR }
                 + Array(withSides(330)[(viewport - footer)..<viewport])
-            let got = s.makeImage().map { lines(of: $0, cross: cross, axis: axis) } ?? []
-            check("长截图\(tag)：两侧边栏不动也照常接上，边栏不重复", events == [.started, .appended(40), .appended(50), .appended(60),
+            let got = s.makeImage().map { lines(of: $0, cross: cross) } ?? []
+            check("长截图：两侧边栏不动也照常接上，边栏不重复", events == [.started, .appended(40), .appended(50), .appended(60),
                                                                 .appended(180)] && got == expected, "\(events) \(got.count)/\(expected.count)")
         }
 
@@ -1102,14 +1106,14 @@ enum DebugUITest {
         let scale = screen.backingScaleFactor
         let px = Int(region.width * scale), viewLines = Int(region.height * scale)
         let longPage = content(viewLines * 7, px, seed: 3)
-        func screenFrame(_ pos: Int) -> PixelFrame { frame(Array(longPage[pos..<(pos + viewLines)]), cross: px, axis: .vertical) }
+        func screenFrame(_ pos: Int) -> PixelFrame { frame(Array(longPage[pos..<(pos + viewLines)]), cross: px) }
         let step = viewLines / 4
         for k in 0..<10 { session.debugFeed(screenFrame(k * step)) }
         try? await Task.sleep(for: .milliseconds(600))
         let expectedLength = viewLines + 9 * step
         check("喂 10 帧：拼好的长度正确，控制条显示「已拼接」", session.debugLength == expectedLength
               && session.debugBar.debugLengthText == "已拼接 \(expectedLength) 像素", "\(session.debugLength) / \(expectedLength)")
-        check("开始滚动后提示消失、预览有内容", session.debugOverlay.message == nil && session.debugPreview.debugPartCount >= 1)
+        check("开始滚动后提示消失、预览有内容", session.debugOverlay.message == nil && session.debugPreview.debugHasImage)
         if let image = await session.debugImage() {
             check("长截图结果：宽 \(px) 像素、高 \(expectedLength) 像素", image.width == px && image.height == expectedLength)
         }
@@ -1120,10 +1124,9 @@ enum DebugUITest {
         try? await Task.sleep(for: .milliseconds(300))
         check("一下滚太远：不出提示（过程中保持干净），长度不变", session.debugOverlay.message == nil)
 
-        session.debugSetAxis(.horizontal)
-        try? await Task.sleep(for: .milliseconds(200))
-        check("换成横向：从头开始，不再出提示", session.debugOverlay.message == nil
-              && session.debugLength == 0 && session.debugBar.debugLengthText == "等待滚动…")
+        // 自动滚动按钮（不真的点：点了会请求「辅助功能」权限、向屏幕发滚动事件）
+        check("控制条上有「自动滚动」，没有方向切换", session.debugBar.debugAutoScrollTitle == "自动滚动"
+              && !session.debugAutoScroll.isActive)
 
         // Esc：长截图期间注册成临时全局快捷键（焦点在被截的 App 里），按下就取消；结束后注销
         let escape = session.debugInstallEscape()
@@ -1316,7 +1319,7 @@ enum DebugUITest {
         // annotation(at:) 用画布坐标（屏幕内坐标），overlayCursor 用全局坐标
         check("鼠标在矩形边框上：变成四向移动光标", annotator.annotation(at: CGPoint(x: 121, y: 145))?.id == firstID
               && session.overlayCursor(at: g(121, 145)) == .snapMove)
-        NSCursor.debugRenderMovePreview(to: dir.appendingPathComponent("10g-移动光标.png"))
+        WarmCursor.debugRenderPreview(to: dir.appendingPathComponent("10g-光标.png"))
         check("离边框 5 点：不算在标注上，仍是十字", annotator.annotation(at: CGPoint(x: 115, y: 145)) == nil
               && annotator.annotation(at: CGPoint(x: 126, y: 145)) == nil && session.overlayCursor(at: g(115, 145)) != .arrow)
         check("方框内部：不算在标注上", annotator.annotation(at: CGPoint(x: 150, y: 135)) == nil)
