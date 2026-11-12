@@ -237,6 +237,38 @@ import Testing
         #expect(Self.rows(of: image) == expected)
     }
 
+    /// 平滑滚动每帧只滚 2 个像素：半透明标题栏里的文字，相邻几行本来就很像，错开 2 个像素也「对得上」——
+    /// 不能因此把它当成正文，每一帧留下一条（选区很大、滚得很细时最明显）
+    @Test func 每帧只滚几个像素时半透明顶栏也不重复() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let top = 12, height = 100
+        // 栏里的「文字」：每 6 行一样（磨砂模糊后相邻几行很像），底下透上来的内容让每帧有一点点不同（三分之一的像素差 1 级）
+        func bar(_ i: Int) -> [UInt32] { Self.pageRow(i / 6, seed: 7) }
+        func frame(_ offset: Int) -> PixelFrame {
+            Self.jittered(Self.frame((0..<height).map { i in i < top ? bar(i) : Self.pageRow(offset + i) }), seed: offset, columns: 0)
+        }
+        for step in 0...40 {
+            var f = frame(step * 2)
+            if step > 0 {   // 顶栏有一点点变化（透上来的内容），正文不变
+                var data = f.data
+                data.withUnsafeMutableBytes { raw in
+                    let p = raw.bindMemory(to: UInt32.self)
+                    for i in 0..<(top * Self.width) where (i + step) % 3 == 0 {
+                        let b = p[i] & 0xFF
+                        p[i] = (p[i] & ~0xFF) | (b == 0xFF ? 0xFE : b + 1)
+                    }
+                }
+                f = PixelFrame(width: f.width, height: f.height, bytesPerRow: f.bytesPerRow, data: data, colorSpace: f.colorSpace)
+            }
+            stitcher.add(f)
+        }
+        let rows = Self.rows(of: try #require(stitcher.makeImage()))
+        #expect(rows.count == height + 40 * 2)
+        let content = rows.dropFirst(top).map { $0.map { $0 & 0xFFFF_FF00 } }
+        let expected = (top..<(height + 80)).map { Self.pageRow($0).map { $0 & 0xFFFF_FF00 } }
+        #expect(Array(content) == expected, "标题栏被拼进了正文")
+    }
+
     /// 半透明的底栏（例如磨砂的输入框）只在末尾出现一次（取最后一帧的样子）
     @Test func 半透明的底栏只在末尾出现一次() throws {
         var stitcher = ScrollStitcher(axis: .vertical)

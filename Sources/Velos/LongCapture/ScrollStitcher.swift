@@ -768,8 +768,10 @@ struct ScrollStitcher {
     }
 
 
-    /// 顶部不跟着滚动的栏有多高：从开头往下，当前帧的行和上一帧滚动前对应的行对不上（半透明的栏每帧都在变，
-    /// 固定的栏原地不动，都对不上滚动后的位置），直到连续 3 行有内容的行对得上为止。纯色行不算。最多占三分之一
+    /// 顶部不跟着滚动的栏有多高（固定的、半透明磨砂的标题栏）。从开头往下逐行看：这一行和上一帧「原位置」那一行更像，
+    /// 还是和「滚动前对应的那一行」更像。栏不跟着滚动，和原位置更像（半透明的只差一点点）；正文跟着滚动，和滚动前的位置一样、
+    /// 和原位置不一样。只看「和滚动前的位置对不对得上」不够：每帧只滚几个像素时，栏里文字相邻的几行本来就很像，也对得上，
+    /// 会被当成正文，每一帧在长图里留下一条。两种都很像的（空白）不算数；连续 3 行明确跟着滚动就到头了。最多占三分之一
     private static func unmovedTop(_ previous: PixelFrame, _ current: PixelFrame, previousLines: [Line], currentLines: [Line],
                                    shift d: Int, axis: ScrollAxis, span: Range<Int>) -> Int {
         let n = currentLines.count
@@ -780,13 +782,12 @@ struct ScrollStitcher {
                 guard let pb = prevRaw.baseAddress, let cb = curRaw.baseAddress else { return 0 }
                 let bpr = current.bytesPerRow
                 let step = max(1, span.count / 240)
-                /// 当前帧第 i 行和上一帧第 i + d 行对得上（像素允许细微差别）
-                func matches(_ i: Int) -> Bool {
-                    if currentLines[i] == previousLines[i + d] { return true }
+                /// 当前帧第 i 行和上一帧第 j 行的平均像素差（每个通道 0~255）
+                func distance(_ i: Int, _ j: Int) -> Float {
                     var total = 0, count = 0
                     var x = span.lowerBound
                     while x < span.upperBound {
-                        let (po, co) = axis == .vertical ? ((i + d) * bpr + x * 4, i * bpr + x * 4) : (x * bpr + (i + d) * 4, x * bpr + i * 4)
+                        let (po, co) = axis == .vertical ? (j * bpr + x * 4, i * bpr + x * 4) : (x * bpr + j * 4, x * bpr + i * 4)
                         let p = pb.loadUnaligned(fromByteOffset: po, as: UInt32.self)
                         let q = cb.loadUnaligned(fromByteOffset: co, as: UInt32.self)
                         if p != q {
@@ -797,7 +798,7 @@ struct ScrollStitcher {
                         count += 1
                         x += step
                     }
-                    return count > 0 && Float(total) / Float(count * 3) <= 2
+                    return count == 0 ? 0 : Float(total) / Float(count * 3)
                 }
                 var header = 0, run = 0, i = begin
                 while i < end {
@@ -805,10 +806,14 @@ struct ScrollStitcher {
                         i += 1
                         continue
                     }
-                    if matches(i) {
+                    let moved = currentLines[i] == previousLines[i + d] ? 0 : distance(i, i + d)
+                    let stayed = currentLines[i] == previousLines[i] ? 0 : distance(i, i)
+                    if moved <= 2, stayed > moved + 1 {
+                        // 明确跟着滚动了：正文
                         run += 1
                         if run == 3 { break }
-                    } else {
+                    } else if stayed <= moved || moved > 2 {
+                        // 不动（或者只差一点点），或者和滚动前的位置对不上：栏
                         run = 0
                         header = i + 1
                     }
