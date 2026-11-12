@@ -105,6 +105,7 @@ struct ScrollStitcher {
     private var lostFrames = 0
     private var lostMotion = 0
     private var lostLines: [Line]?
+    private var lostFrame: PixelFrame?
     /// 末尾固定部分的长度（按最近一次滚动算）
     private var footerLength = 0
     /// 拼好的内容：一行接一行（横向时是一列接一列，每列的像素连续存放），每行 cross × 4 字节
@@ -151,6 +152,7 @@ struct ScrollStitcher {
             lostFrames = 0
             lostMotion = 0
             lostLines = nil
+            lostFrame = nil
         }
         return event
     }
@@ -280,11 +282,28 @@ struct ScrollStitcher {
     /// 再等也对不上了。从当前画面接着拼：中间滚过去没截到的部分留空（直接接上，不会重复、也不会错位）。
     /// 往回滚时不这样做：回到已经拼过的地方，接上去就重复了，等滚回能对上的位置
     private mutating func recoverIfOutrun(_ frame: PixelFrame) -> Event? {
-        guard first == nil, let previous = last, previous.width == frame.width, previous.height == frame.height else { return nil }
+        guard let previous = last, previous.width == frame.width, previous.height == frame.height else { return nil }
         let lines = Self.lines(of: frame, axis: axis, span: span(for: frame))
-        if let earlier = lostLines, let d = Self.shift(from: earlier, to: lines) { lostMotion += d }
+        var pairShift: Int?
+        if let earlier = lostLines, let earlierFrame = lostFrame {
+            pairShift = Self.shift(from: earlier, to: lines)
+                ?? Self.tolerantShift(previous: (earlier, Self.profiles(of: earlierFrame, axis: axis, span: span(for: earlierFrame))),
+                                      current: (lines, Self.profiles(of: frame, axis: axis, span: span(for: frame))), prior: nil,
+                                      frames: (earlierFrame, frame), axis: axis, span: span(for: frame), inner: nil)
+            if let d = pairShift { lostMotion += d }
+        }
+        let earlierFrame = lostFrame
         lostLines = lines
+        lostFrame = frame
         lostFrames += 1
+        if first != nil {
+            // 还没开始拼：开头截到的那一张是过渡画面（刚从调度中心回来、切换桌面的动画、窗口还没画好），
+            // 之后的画面彼此能对上（页面在正常滚动）却一直对不上它——起点换成上一张正常的画面，重新开始
+            guard lostFrames >= 3, let d = pairShift, d != 0, let restart = earlierFrame else { return nil }
+            self = ScrollStitcher(axis: axis, maxLength: maxLength, edgeMargin: edgeMargin)
+            add(restart)
+            return add(frame)
+        }
         guard lostFrames >= Self.outrunFrames, lostMotion > 0, (recentShift ?? 0) > 0 else { return nil }
         let n = lines.count
         let header = max(headerLength, movingHeader)
@@ -307,6 +326,7 @@ struct ScrollStitcher {
         lostFrames = 0
         lostMotion = 0
         self.lostLines = nil
+        lostFrame = nil
         return reachedLimit ? .limitReached : .appended(range.count)
     }
 

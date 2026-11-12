@@ -214,6 +214,23 @@ import Testing
         #expect(Self.rows(of: image) == (0..<(420 + height)).map { Self.pageRow($0) })
     }
 
+    /// 开头截到的是过渡画面（刚从调度中心回来、切换桌面的动画）：之后页面在正常滚动、却一直对不上它。
+    /// 不能一直卡着不拼——换成正常的画面重新开始
+    @Test func 开头截到过渡画面时换成正常画面重新开始() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let height = 100
+        stitcher.add(Self.frame((0..<height).map { Self.pageRow($0, seed: 9) }))   // 和页面毫无关系的一张
+        var events: [ScrollStitcher.Event] = []
+        for step in 0...6 { events.append(stitcher.add(Self.window(offset: 300 + step * 10, height: height))) }
+        #expect(events.contains { if case .appended = $0 { return true } else { return false } })
+        let image = try #require(stitcher.makeImage())
+        let rows = Self.rows(of: image)
+        // 从某一张正常画面开始，后面连续、不重复
+        let start = try #require((0..<400).first { rows[0] == Self.pageRow($0) })
+        #expect(rows == (start..<(start + rows.count)).map { Self.pageRow($0) })
+        #expect(start + rows.count == 300 + 60 + height)
+    }
+
     // MARK: - 半透明的顶栏、底栏
 
     /// 页面从 offset 行开始、可见 height 行；最上面 top 行、最下面 bottom 行被半透明的栏盖住：

@@ -190,8 +190,10 @@ enum DebugUITest {
         await captureComposite(around: CGRect(x: g(60, 60).x, y: g(60, 60).y, width: 300, height: 240),
                                to: dir.appendingPathComponent("5b-选区与尺寸标签实际显示.png"))
 
-        // 13. 切到全屏再切回来，选区保留
+        // 13. 切到全屏再切回来，选区保留；全屏模式也能长截图
         session.toggleMode()
+        session.debugToolbarRefresh()
+        check("全屏模式「长截图」可用", session.debugToolbar.debugLongCaptureEnabled == true)
         session.toggleMode()
         check("全屏切回区域后保留选区", local(selector.selection) == CGRect(x: 100, y: 100, width: 200, height: 150))
         if ProcessInfo.processInfo.environment["VELOS_UITEST_PAUSE"] != nil {

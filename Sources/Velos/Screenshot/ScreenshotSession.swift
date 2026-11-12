@@ -269,9 +269,19 @@ final class ScreenshotSession: OverlayEventHandler {
     }
 
     /// 长截图：关掉截图界面（焦点还给原来的 App），交给长截图会话。要在画标注之前开始
+    /// 长截图：区域模式截选区；全屏模式把鼠标所在的整块屏幕当作选区（菜单栏、程序坞会被认作固定的顶栏、底栏，只出现一次）
     private func beginLongCapture() {
-        guard mode == .region, annotator?.document.isEmpty != false,
-              let target = selector.target, let frozen = displays[target.displayID] else { return }
+        guard annotator?.document.isEmpty != false else { return }
+        let target: (rect: CGRect, displayID: CGDirectDisplayID)
+        switch mode {
+        case .region:
+            guard let regionTarget = selector.target else { return }
+            target = regionTarget
+        case .fullscreen:
+            guard let frozen = displays[activeDisplayID] else { return }
+            target = (frozen.screen.frame, activeDisplayID)
+        }
+        guard let frozen = displays[target.displayID] else { return }
         let screen = frozen.screen
         finish()
         onLongCapture?(target.rect, screen)
@@ -390,7 +400,7 @@ final class ScreenshotSession: OverlayEventHandler {
         toolbar.update(tool: annotator?.tool, style: annotator?.displayedStyle ?? AnnotationStyle(),
                        canUndo: annotator?.document.canUndo ?? false, canRedo: annotator?.document.canRedo ?? false,
                        selectionTool: annotator?.selectedAnnotation?.tool,
-                       canLongCapture: mode == .region && annotator?.document.isEmpty != false)
+                       canLongCapture: annotator?.document.isEmpty != false)
         if toolbar.superview !== view {
             toolbar.removeFromSuperview()
             view.addSubview(toolbar)

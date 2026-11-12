@@ -184,14 +184,14 @@ final class AnnotationToolbar: NSView {
 
     /// 刷新选中状态；选了工具时显示第二行（马赛克 / 模糊只显示强度）。
     /// - Parameter selectionTool: 没选工具但选中了标注时，按这个标注的种类显示第二行
-    /// - Parameter canLongCapture: 长截图按钮是否可用（全屏模式、已经画了标注时不可用）
+    /// - Parameter canLongCapture: 长截图按钮是否可用（已经画了标注时不可用）
     func update(tool: AnnotationTool?, style: AnnotationStyle, canUndo: Bool, canRedo: Bool,
                 selectionTool: AnnotationTool? = nil, canLongCapture: Bool = true) {
         for (t, button) in toolButtons { button.isSelected = t == tool }
         if let longCapture = actionButtons[.longCapture] {
             longCapture.isEnabled = canLongCapture
             longCapture.toolTip = canLongCapture ? "长截图：滚动页面，截取超出屏幕的内容"
-                                                 : "长截图要在画标注之前开始（全屏模式不能长截图）"
+                                                 : "长截图要在画标注之前开始"
         }
         actionButtons[.undo]?.isEnabled = canUndo
         actionButtons[.redo]?.isEnabled = canRedo
