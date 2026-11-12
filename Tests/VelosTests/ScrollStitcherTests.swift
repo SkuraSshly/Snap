@@ -231,6 +231,36 @@ import Testing
         #expect(start + rows.count == 300 + 60 + height)
     }
 
+    /// 调度中心、切换桌面这类画面：和页面毫无关系，彼此之间又「像是在移动」（窗口缩略图缩放、上下移动），
+    /// 像素有细微差别。拼到一半时打开、再回到原来的页面：不能把它接进长图，回来后接着正常拼
+    static func missionControl(_ k: Int) -> PixelFrame {
+        jittered(frame((0..<100).map { pageRow(5000 + k * 6 + $0, seed: 9) }), seed: k)
+    }
+
+    @Test func 拼到一半打开调度中心再回来接着拼() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let height = 100
+        for offset in stride(from: 0, through: 60, by: 10) { stitcher.add(Self.window(offset: offset, height: height)) }
+        for k in 0..<40 {
+            let event = stitcher.add(Self.missionControl(k))
+            #expect(event == .lost || event == .unchanged, "调度中心的画面被当成了页面：\(event)")
+        }
+        #expect(stitcher.add(Self.window(offset: 60, height: height)) == .unchanged)
+        for offset in stride(from: 70, through: 120, by: 10) { #expect(stitcher.add(Self.window(offset: offset, height: height)) == .appended(10)) }
+        let rows = Self.rows(of: try #require(stitcher.makeImage()))
+        #expect(rows == (0..<(120 + height)).map { Self.pageRow($0) })
+    }
+
+    @Test func 还没开始拼时打开调度中心再回来照常拼() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let height = 100
+        stitcher.add(Self.window(offset: 0, height: height))
+        for k in 0..<40 { _ = stitcher.add(Self.missionControl(k)) }
+        for offset in stride(from: 10, through: 50, by: 10) { stitcher.add(Self.window(offset: offset, height: height)) }
+        let rows = Self.rows(of: try #require(stitcher.makeImage()))
+        #expect(rows == (0..<(50 + height)).map { Self.pageRow($0) })
+    }
+
     // MARK: - 半透明的顶栏、底栏
 
     /// 页面从 offset 行开始、可见 height 行；最上面 top 行、最下面 bottom 行被半透明的栏盖住：

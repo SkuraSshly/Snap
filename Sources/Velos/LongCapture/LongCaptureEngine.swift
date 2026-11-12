@@ -34,6 +34,9 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     private var previewDirty = false
     private var lastPreview = ContinuousClock.now
     private var colorSpace: CGColorSpace
+    /// 诊断日志：每 3 秒记一次这段时间里各种结果有多少帧（只有数字，不含画面）
+    private var counts: [String: Int] = [:]
+    private var lastCountLog = ContinuousClock.now
 
     #if DEBUG
     /// 自测：这个窗口虽然属于 Velos，也要截进来
@@ -135,6 +138,7 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     /// 拼接一帧，把结果送回主线程（在 queue 上调用）
     private func process(_ frame: PixelFrame) {
         let event = stitcher.add(frame)
+        countForLog(event)
         switch event {
         case .started, .appended, .limitReached, .moved, .unchanged: previewDirty = true   // 覆盖更新也会改变预览
         case .lost: break
@@ -150,6 +154,24 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         let update = Update(event: event, length: stitcher.length, preview: preview, generation: generation)
         let callback = onUpdate
         Task { @MainActor in callback?(update) }
+    }
+
+    private func countForLog(_ event: ScrollStitcher.Event) {
+        let key: String = switch event {
+        case .started: "开始"
+        case .appended: "接上"
+        case .unchanged: "没变"
+        case .moved: "往回"
+        case .lost: "对不上"
+        case .limitReached: "到上限"
+        }
+        counts[key, default: 0] += 1
+        let now = ContinuousClock.now
+        guard now - lastCountLog >= .seconds(3) else { return }
+        let text = counts.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: "，")
+        Log.capture.notice("长截图：近 3 秒 \(text, privacy: .public)；已拼 \(self.stitcher.length) 像素")
+        counts = [:]
+        lastCountLog = now
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {

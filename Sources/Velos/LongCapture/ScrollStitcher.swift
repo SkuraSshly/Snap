@@ -106,6 +106,8 @@ struct ScrollStitcher {
     private var lostMotion = 0
     private var lostLines: [Line]?
     private var lostFrame: PixelFrame?
+    /// 对不上的这几帧里，连续几对是逐像素一致地平移（正数往前、负数往回）：页面确实在稳定地滚动
+    private var steadyPairs = 0
     /// 末尾固定部分的长度（按最近一次滚动算）
     private var footerLength = 0
     /// 拼好的内容：一行接一行（横向时是一列接一列，每列的像素连续存放），每行 cross × 4 字节
@@ -153,6 +155,7 @@ struct ScrollStitcher {
             lostMotion = 0
             lostLines = nil
             lostFrame = nil
+            steadyPairs = 0
         }
         return event
     }
@@ -284,13 +287,16 @@ struct ScrollStitcher {
     private mutating func recoverIfOutrun(_ frame: PixelFrame) -> Event? {
         guard let previous = last, previous.width == frame.width, previous.height == frame.height else { return nil }
         let lines = Self.lines(of: frame, axis: axis, span: span(for: frame))
+        // 这几帧彼此之间是不是「页面在稳定地滚动」：相邻两帧逐像素一致地平移、而且方向一致。
+        // 只认逐像素一致：调度中心、切换桌面的动画（窗口缩略图缩放、上下移动）用容差比对也像在移动，
+        // 认了就会把那些画面接进长图、当成新的起点，回到原来的页面后反而接不上
         var pairShift: Int?
-        if let earlier = lostLines, let earlierFrame = lostFrame {
-            pairShift = Self.shift(from: earlier, to: lines)
-                ?? Self.tolerantShift(previous: (earlier, Self.profiles(of: earlierFrame, axis: axis, span: span(for: earlierFrame))),
-                                      current: (lines, Self.profiles(of: frame, axis: axis, span: span(for: frame))), prior: nil,
-                                      frames: (earlierFrame, frame), axis: axis, span: span(for: frame), inner: nil)
-            if let d = pairShift { lostMotion += d }
+        if let earlier = lostLines, lostFrame != nil, let d = Self.shift(from: earlier, to: lines), d != 0 {
+            pairShift = d
+            lostMotion += d
+            steadyPairs = steadyPairs != 0 && (steadyPairs > 0) != (d > 0) ? (d > 0 ? 1 : -1) : steadyPairs + (d > 0 ? 1 : -1)
+        } else {
+            steadyPairs = 0
         }
         let earlierFrame = lostFrame
         lostLines = lines
@@ -299,12 +305,12 @@ struct ScrollStitcher {
         if first != nil {
             // 还没开始拼：开头截到的那一张是过渡画面（刚从调度中心回来、切换桌面的动画、窗口还没画好），
             // 之后的画面彼此能对上（页面在正常滚动）却一直对不上它——起点换成上一张正常的画面，重新开始
-            guard lostFrames >= 3, let d = pairShift, d != 0, let restart = earlierFrame else { return nil }
+            guard lostFrames >= 3, pairShift != nil, abs(steadyPairs) >= 2, let restart = earlierFrame else { return nil }
             self = ScrollStitcher(axis: axis, maxLength: maxLength, edgeMargin: edgeMargin)
             add(restart)
             return add(frame)
         }
-        guard lostFrames >= Self.outrunFrames, lostMotion > 0, (recentShift ?? 0) > 0 else { return nil }
+        guard lostFrames >= Self.outrunFrames, lostMotion > 0, steadyPairs >= 3, (recentShift ?? 0) > 0 else { return nil }
         let n = lines.count
         let header = max(headerLength, movingHeader)
         let scrollEnd = n - footerLength
@@ -327,6 +333,7 @@ struct ScrollStitcher {
         lostMotion = 0
         self.lostLines = nil
         lostFrame = nil
+        steadyPairs = 0
         return reachedLimit ? .limitReached : .appended(range.count)
     }
 
