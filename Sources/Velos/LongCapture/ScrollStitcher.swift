@@ -171,14 +171,11 @@ struct ScrollStitcher {
             profiles = Self.profiles(of: frame, axis: axis, span: span(for: frame))
             // 先在滚轮提示附近找；提示不准（平滑滚动工具放大了滚动、App 滚动的距离和滚轮量不同）或没有提示时，在所有距离里找
             let usefulHint = hint.flatMap { $0 == 0 ? nil : $0 }
-            // 滚动的那部分（去掉顶部、底部固定的部分）：判断「原地重画」时只看这里。还没滚动过时不知道哪些是固定的，不判原地重画
-            let inner: Range<Int>? = first == nil && headerLength < lines.count - footerLength
-                ? headerLength..<(lines.count - footerLength) : nil
             shift = Self.tolerantShift(previous: (lastLines, previousProfiles), current: (lines, profiles!), hint: usefulHint,
-                                       frames: (previous, frame), axis: axis, span: span(for: frame), inner: inner)
+                                       frames: (previous, frame), axis: axis, span: span(for: frame))
             if shift == nil, usefulHint != nil {
                 shift = Self.tolerantShift(previous: (lastLines, previousProfiles), current: (lines, profiles!), hint: nil,
-                                           frames: (previous, frame), axis: axis, span: span(for: frame), inner: inner)
+                                           frames: (previous, frame), axis: axis, span: span(for: frame))
             }
         }
         guard let shift else {
@@ -194,23 +191,13 @@ struct ScrollStitcher {
             return .unchanged
         }
 
-        let n = lines.count
-        let footer = Self.footer(previous: lastLines, current: lines, shift: shift)
-        let scrollEnd = n - footer
-        let header = first != nil ? min(Self.header(previous: lastLines, current: lines, shift: shift), scrollEnd) : headerLength
-        // 滚动的部分和已拼好的内容必须还有重叠：新帧滚动部分的开头不能越过已拼好的末尾。
-        // 越过了说明这个距离是误认的（真正滚过的距离比整个滚动部分还长，不可能对上）——
-        // 照接的话会把顶部固定的标题栏当成新内容接上去，或者接错位置。当作对不上，等用户滚回来
-        let baseEnd = first != nil ? scrollEnd : committedEnd
-        let basePosition = first != nil ? 0 : position
-        guard baseEnd - (basePosition + shift) >= header else {
-            return Self.mostlySame(lastLines, lines) ? .unchanged : .lost
-        }
         bandResolved = true
-        footerLength = footer
+        let n = lines.count
+        footerLength = Self.footer(previous: lastLines, current: lines, shift: shift)
+        let scrollEnd = n - footerLength
         if let firstFrame = first {
             // 第一次滚动：第一帧去掉末尾固定部分，作为开头；顶部固定部分以后不再覆盖
-            headerLength = header
+            headerLength = min(Self.header(previous: lastLines, current: lines, shift: shift), scrollEnd)
             content = Data()
             content.reserveCapacity(scrollEnd * cross * 4 * 4)
             Self.copy(firstFrame, axis: axis, lines: 0..<scrollEnd, into: &content, at: 0)
@@ -224,8 +211,8 @@ struct ScrollStitcher {
         lastProfiles = profiles
         refresh(from: frame)
 
-        // 当前帧露出了已拼好的末尾之后的内容：接上（顶部固定的部分永远不接，上面已经保证不会越过它）
-        let start = max(headerLength, committedEnd - position)
+        // 当前帧露出了已拼好的末尾之后的内容：接上
+        let start = max(0, committedEnd - position)
         guard start < scrollEnd else { return .moved }
         var range = start..<scrollEnd
         let room = maxLength - committedEnd - footerLength
@@ -434,7 +421,7 @@ struct ScrollStitcher {
     /// 有滚轮提示时只在提示附近找（快、也不容易被重复的花纹骗）
     private static func tolerantShift(previous: (lines: [Line], profiles: [Profile]), current: (lines: [Line], profiles: [Profile]),
                                       hint: Int?, frames: (previous: PixelFrame, current: PixelFrame), axis: ScrollAxis,
-                                      span: Range<Int>, inner: Range<Int>?) -> Int? {
+                                      span: Range<Int>) -> Int? {
         let n = current.lines.count
         guard n == previous.lines.count, n == current.profiles.count, n == previous.profiles.count else { return nil }
         let minOverlap = max(8, n / 8)
@@ -529,18 +516,9 @@ struct ScrollStitcher {
                     if let bestLocal = local.min(by: { $0.1 < $1.1 }) { refined.append((bestLocal.0, bestLocal.1)) }
                 }
                 refined.sort { $0.cost < $1.cost }
-                // 找不到可信的滚动距离时，是局部重画（刚滚到时没画完的部分补上了、动图换了一帧），还是一下滚得太远、和上一帧没有重叠？
-                // 局部重画：滚动的那部分里（顶部、底部固定的部分不算）一半以上的行原地没变——当作没滚动，由调用方用这一帧更新内容。
-                // 不能把固定的部分也算进去：选区里上下有大片不动的区域时，一下滚太远，没变的行照样过半，
-                // 会把错位的画面当成重画写进去，之后接错位置、已经截过的内容又被接一遍。
-                // 还没滚动过（不知道哪些是固定的）时一律算对不上：等用户滚回能对上的位置
-                let localChange: Int? = {
-                    guard let inner else { return nil }
-                    let rows = usable.filter { inner.contains($0) }
-                    guard !rows.isEmpty else { return nil }
-                    let unchanged = rows.filter { pixelDistance($0, $0) <= 1.2 }.count
-                    return unchanged * 2 >= rows.count ? 0 : nil
-                }()
+                // 找不到可信的滚动距离：原位置没变的行占一半以上，是局部重画（刚滚到时没画完的部分补上了、动图换了一帧）——
+                // 当作没滚动，由调用方用这一帧更新内容；否则才是对不上
+                let localChange: Int? = (usable.count - changedRows) * 2 >= usable.count ? 0 : nil
                 guard let best = refined.first, best.cost <= 6 else { return localChange }
                 let second = refined.dropFirst().first { abs($0.d - best.d) > 2 }?.cost ?? .infinity
                 guard second >= best.cost * 1.6 + 1 else { return localChange }

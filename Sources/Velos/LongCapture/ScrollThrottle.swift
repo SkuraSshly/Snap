@@ -5,7 +5,6 @@ import AppKit
 /// 按时间发放「额度」：每秒最多移动 maxPerFrame ÷ frameInterval 点，额度最多攒一帧的量。
 /// 一次滚动超出额度的部分先记下来（pending），之后每一帧补发一点；反向滚动时清掉没补发的部分；
 /// 积压最多 maxPending 点，再多的直接丢掉（免得松手后页面还滚很久）。
-/// 普通鼠标滚轮的滚动整个放进积压（queue），全部由每帧补发：见 LongCaptureScrollTap。
 struct ScrollThrottle {
     /// 每一帧最多让页面移动多少点
     let maxPerFrame: Double
@@ -44,14 +43,6 @@ struct ScrollThrottle {
         return allowed
     }
 
-    /// 整个放进积压、这次一点也不放行（普通鼠标滚轮：由每帧补发匀速滚过去）
-    mutating func queue(_ delta: Double, now: TimeInterval) {
-        refill(now)
-        guard delta != 0 else { return }
-        if pending != 0, (pending > 0) != (delta > 0) { pending = 0 }
-        pending = min(max(pending + delta, -maxPending), maxPending)
-    }
-
     /// 每一帧调用：返回这一帧要补发多少（点），0 表示没有
     mutating func drain(now: TimeInterval) -> Double {
         refill(now)
@@ -71,11 +62,8 @@ struct ScrollThrottle {
 final class LongCaptureScrollTap {
     /// 正在工作的限速（长截图期间只有一个）：自己补发的事件要先登记，拦截时放过
     private(set) static weak var current: LongCaptureScrollTap?
-    /// 登记过、马上会经过这里的自己发的滚动量（到这里时应该是的数值）
+    /// 登记过、马上会经过这里的自己发的滚动量
     private var ownAmounts: [Int64] = []
-    /// 发滚动事件时乘的符号：开着「自然滚动」时，系统会把发出去的像素滚动再反转一次（和真的触控板一样），
-    /// 所以要先反过来发。按用户自己滚动事件上的标记先猜，再按自己发的事件实际到这里的数值校正
-    private(set) var postSign: Int32 = 1
     /// 补发积压时用的手势（开始 → 进行中 → 结束）
     private var drainGesture: ScrollGesture?
 
@@ -83,11 +71,6 @@ final class LongCaptureScrollTap {
     private var source: CFRunLoopSource?
     private var timer: Timer?
     private var throttle: ScrollThrottle
-    /// 鼠标滚轮每「行」滚多少点（Safari、Chrome 的滚轮一行大约 40 点）
-    private static let pointsPerLine = 40.0
-    /// 记录前几个滚轮事件的数值（日志里只有数字，便于调整换算）
-    private var loggedWheelEvents = 0
-    private var directionChecked = false
     /// 选区（Quartz 全局坐标：原点在主屏左上角）
     private let region: CGRect
     let axis: ScrollAxis
@@ -149,44 +132,12 @@ final class LongCaptureScrollTap {
             ? (.scrollWheelEventPointDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventDeltaAxis1)
             : (.scrollWheelEventPointDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventDeltaAxis2)
         let delta = Double(event.getIntegerValueField(pointField))
-        let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
-        // 自己发的（补发积压）：已经控制过速度，放过
-        if continuous, delta != 0 {
-            if let index = ownAmounts.firstIndex(of: Int64(delta)) {
-                ownAmounts.remove(at: index)
-                return Unmanaged.passUnretained(event)
-            }
-            if let index = ownAmounts.firstIndex(of: -Int64(delta)) {
-                // 到这里方向反了（系统按「自然滚动」又反转了一次）：这个事件就地改回来，以后反着发
-                ownAmounts.remove(at: index)
-                postSign = -postSign
-                Log.capture.notice("长截图：补发的滚动被系统反转，改为反向发送")
-                event.setIntegerValueField(pointField, value: -Int64(delta))
-                event.setDoubleValueField(fixedField, value: -event.getDoubleValueField(fixedField))
-                event.setIntegerValueField(lineField, value: -event.getIntegerValueField(lineField))
-                return Unmanaged.passUnretained(event)
-            }
-        }
-        if !continuous {
-            // 普通鼠标滚轮（一格一格的）：事件里的数值和页面实际滚多远对不上——各 App 每格滚的距离不同，还会自己加滚动动画，
-            // 快速转动时一格能滚好几百点，按事件里的数值限速根本限不住，两帧之间页面跳得太远就接不上。
-            // 所以把原事件拦下，换算成点数放进积压，由每帧补发「像触控板一样」的像素滚动：页面滚多少完全由这里决定，匀速、不超速
-            let lines = event.getDoubleValueField(fixedField)
-            let points = lines != 0 ? lines * Self.pointsPerLine : delta * 4
-            guard points != 0 else { return Unmanaged.passUnretained(event) }
-            if loggedWheelEvents < 3 {
-                loggedWheelEvents += 1
-                Log.capture.notice("长截图：鼠标滚轮 行 \(event.getIntegerValueField(lineField)) 定点 \(lines) 点 \(delta) → \(points) 点")
-            }
-            if !directionChecked {
-                directionChecked = true
-                // 用户的滚轮事件已经按「自然滚动」反转过：自己发的像素滚动系统还会再反转一次，先反过来发
-                if NSEvent(cgEvent: event)?.isDirectionInvertedFromDevice == true { postSign = -1 }
-            }
-            throttle.queue(points, now: ProcessInfo.processInfo.systemUptime)
-            return nil
-        }
         guard delta != 0 else { return Unmanaged.passUnretained(event) }
+        // 自己发的（补发积压）：已经控制过速度，原样放过
+        if let index = ownAmounts.firstIndex(of: Int64(delta)) {
+            ownAmounts.remove(at: index)
+            return Unmanaged.passUnretained(event)
+        }
         let allowed = throttle.take(delta, now: ProcessInfo.processInfo.systemUptime)
         if allowed != delta {
             // 按比例缩小这次滚动（三种单位一起改，各 App 读哪个都一致）；放行 0 时也保留事件，不打断手势的开始 / 结束
