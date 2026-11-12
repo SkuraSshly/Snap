@@ -143,6 +143,42 @@ import Testing
         #expect(Self.rows(of: image).count == header + visible + 40 + footer)
     }
 
+    // MARK: - 一下滚太远
+
+    /// 选区里大片不动（上下各有很高的固定区域），中间只有一窄条在滚：一下滚太远、和上一帧没有重叠时，
+    /// 不能因为「大部分行没变」就当成原地重画，把错位的画面写进去——之后会接错位置，已经截过的内容又被接一遍。
+    /// 应该报告对不上；用户往回滚到能对上的位置后，接着正常拼接
+    @Test func 大片不动时一下滚太远不会拼错() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let header = 120, footer = 120, visible = 60
+        func at(_ offset: Int) -> PixelFrame { Self.window(offset: offset, height: visible, header: header, footer: footer) }
+        stitcher.add(at(0))
+        stitcher.add(at(5))
+        stitcher.add(at(10))
+        #expect(stitcher.add(at(300)) == .lost)
+        #expect(stitcher.add(at(305)) == .lost)
+        #expect(stitcher.add(at(15)) == .appended(5))
+        #expect(stitcher.add(at(20)) == .appended(5))
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<header).map { Self.pageRow($0, seed: 1) } + (0..<(visible + 20)).map { Self.pageRow($0) }
+            + (0..<footer).map { Self.pageRow($0, seed: 2) }
+        #expect(Self.rows(of: image) == expected)
+    }
+
+    /// 还没开始滚动时第一下就滚太远：也是对不上，不能把那一帧当成新的起点（否则开头和后面接不上）
+    @Test func 第一下就滚太远时等滚回来再接() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let header = 120, footer = 120, visible = 60
+        func at(_ offset: Int) -> PixelFrame { Self.window(offset: offset, height: visible, header: header, footer: footer) }
+        stitcher.add(at(0))
+        #expect(stitcher.add(at(400)) == .lost)
+        #expect(stitcher.add(at(8)) == .appended(8))
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<header).map { Self.pageRow($0, seed: 1) } + (0..<(visible + 8)).map { Self.pageRow($0) }
+            + (0..<footer).map { Self.pageRow($0, seed: 2) }
+        #expect(Self.rows(of: image) == expected)
+    }
+
     // MARK: - 固定的边栏
 
     /// 左边 40 列是滚动的正文，右边 24 列是不动的边栏（每行内容不同）；
