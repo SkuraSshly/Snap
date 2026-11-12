@@ -1091,6 +1091,9 @@ enum DebugUITest {
         session.debugStartWithoutCapture()
         try? await Task.sleep(for: .milliseconds(200))
         check("长截图开始：提示「请缓慢向下滚动页面」", session.debugOverlay.message?.contains("向下滚动") == true)
+        let localRegion = region.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
+        check("提示条在选区外面（不会被截进长图）", session.debugOverlay.debugMessageFrame.map { !$0.intersects(localRegion) } == true,
+              "\(String(describing: session.debugOverlay.debugMessageFrame)) \(localRegion)")
         check("控制条在选区下方，预览在选区右边", session.debugBar.barFrame.maxY <= region.minY
               && session.debugPreview.isVisible && session.debugPreview.frame.minX >= region.maxX)
 

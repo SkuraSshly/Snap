@@ -288,6 +288,80 @@ import Testing
         try Self.checkSidebarResult(stitcher, scrolled: 12 * 9, height: 100)
     }
 
+    /// 前 columns 列里三分之一的像素蓝色通道差 1 级（平滑滚动让正文停在半个像素上，文字的像素和上一帧有细微差别）：
+    /// 逐像素比对对不上，只能容差比对。不动的边栏不受影响
+    static func jittered(_ frame: PixelFrame, seed: Int, columns: Int = .max) -> PixelFrame {
+        var data = frame.data
+        let width = frame.width
+        data.withUnsafeMutableBytes { raw in
+            let p = raw.bindMemory(to: UInt32.self)
+            for i in 0..<p.count where (i + seed) % 3 == 0 && i % width < columns {
+                let b = p[i] & 0xFF
+                p[i] = (p[i] & ~0xFF) | (b == 0xFF ? 0xFE : b + 1)
+            }
+        }
+        return PixelFrame(width: frame.width, height: frame.height, bytesPerRow: frame.bytesPerRow, data: data,
+                          colorSpace: frame.colorSpace)
+    }
+
+    /// 正文像素有细微差别（逐像素对不上）、旁边的边栏完全不动：照样认出边栏，边栏不会一段段重复
+    @Test func 像素有细微差别时也认得出边栏() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        for step in 0...12 {
+            stitcher.add(Self.jittered(Self.sidebarFrame(offset: step * 9, height: 100, spinner: nil), seed: step, columns: 40))
+        }
+        let image = try #require(stitcher.makeImage())
+        let rows = Self.rows(of: image)
+        #expect(rows.count == 100 + 12 * 9)
+        let below = rows.dropFirst(100)
+        let repeated = (40..<58).contains { x in Set(below.map { $0[x] & 0xFFFF_FF00 }).count > 1 }
+        #expect(!repeated, "边栏被当成正文重复拼上了")
+    }
+
+    /// 正文中间浮着一块不跟着滚动的东西（悬浮按钮、提示条）：边栏照样认得出来，不会一段段重复
+    @Test func 正文上浮着不动的东西时也认得出边栏() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        for step in 0...12 {
+            let base = Self.sidebarFrame(offset: step * 9, height: 100, spinner: nil)
+            var data = base.data
+            data.withUnsafeMutableBytes { raw in
+                let p = raw.bindMemory(to: UInt32.self)
+                for y in 40..<56 { for x in 8..<32 { p[y * Self.width + x] = 0xFF2E_211A } }
+            }
+            stitcher.add(PixelFrame(width: base.width, height: base.height, bytesPerRow: base.bytesPerRow, data: data,
+                                    colorSpace: base.colorSpace))
+        }
+        let image = try #require(stitcher.makeImage())
+        let rows = Self.rows(of: image)
+        let below = rows.dropFirst(100)
+        let repeated = (40..<58).contains { x in Set(below.map { $0[x] }).count > 1 }
+        #expect(!repeated, "边栏被当成正文重复拼上了")
+    }
+
+    /// 边栏先跟着整页一起滚，滚到一定位置后停住不动（网页里吸顶的侧栏）：一开始认不出边栏，
+    /// 停住后滚几下就认出来，之后边栏不再一段段重复
+    @Test func 边栏后来才停住也能认出来() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let height = 100, stick = 3
+        func frame(_ step: Int) -> PixelFrame {
+            let sideOffset = min(step, stick) * 9
+            return Self.frame((0..<height).map { y in
+                Array(Self.pageRow(step * 9 + y)[0..<40]) + Array(Self.pageRow(sideOffset + y, seed: 3)[40..<64])
+            })
+        }
+        for step in 0...30 { stitcher.add(frame(step)) }
+        let rows = Self.rows(of: try #require(stitcher.makeImage()))
+        #expect(rows.count == height + 30 * 9)
+        // 停住后再滚几下（认出边栏要连续 3 次）之后，边栏那几列不再有新内容
+        let settled = rows.dropFirst(height + (stick + 6) * 9)
+        let repeated = (40..<58).contains { x in Set(settled.map { $0[x] }).count > 1 }
+        #expect(!repeated, "边栏停住以后还在被当成正文拼上")
+        for (y, row) in rows.enumerated() where Array(row[0..<40]) != Array(Self.pageRow(y)[0..<40]) {
+            Issue.record("正文第 \(y) 行和页面不一致")
+            break
+        }
+    }
+
     /// 边栏里有个一直在变的小东西：不能因为它就把整个边栏当成在滚动
     @Test func 边栏里有转圈图标时仍然认得出边栏() throws {
         var stitcher = ScrollStitcher(axis: .vertical)

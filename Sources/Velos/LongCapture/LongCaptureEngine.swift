@@ -52,7 +52,9 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
 
     /// 开始截取 region（全局坐标，单位：点）
     func start(region: CGRect, screen: NSScreen) async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // 要所有 App（不只是屏幕上正在显示窗口的）：选区边框、提示刚弹出来时可能还没登记成「在屏幕上」，
+        // 这时 Velos 不在列表里，就排除不掉，提示条会被截进画面
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw LongCaptureError.displayNotFound
         }
@@ -63,6 +65,7 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         // 自测：截 Velos 自己开的测试页面（平时 Velos 的窗口一律不截）
         if let id = Self.debugIncludedWindow { excepting = content.windows.filter { $0.windowID == id } }
         #endif
+        if own.isEmpty { Log.capture.error("长截图：没找到 Velos 自己，选区边框和提示可能被截进画面") }
         let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: excepting)
         let scale = CGFloat(filter.pointPixelScale)
         let frame = screen.frame

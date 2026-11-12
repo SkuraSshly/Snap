@@ -117,6 +117,10 @@ struct ScrollStitcher {
     private var bandResolved = false
     /// 边栏往下延伸的部分用的颜色：每个位置一个（边栏的背景色）
     private var sideFill: [UInt32] = []
+    /// 每一列（横向时是每一行）目前算边栏还是正文，以及连续几次滚动看到它「不跟着滚动」「跟着滚动」
+    private var sideColumn: [Bool] = []
+    private var sideStreak: [Int] = []
+    private var contentStreak: [Int] = []
 
     private struct Line: Equatable {
         let hash: UInt64
@@ -165,22 +169,9 @@ struct ScrollStitcher {
         if reachedLimit { return .limitReached }
 
         // 还没滚动过：画面变了的话，看是不是只有一段在滚动（两侧是不动的边栏）；是的话以后只用这一段
-        if !bandResolved, first != nil, let changed = scrollingSpan(previous, frame) {
-            let full = lineCrossCount(frame)
-            if changed.count >= full * 15 / 100, changed.count <= full * 95 / 100 {
-                band = changed
-                let bandPrevious = Self.lines(of: previous, axis: axis, span: span(for: previous))
-                let bandCurrent = Self.lines(of: frame, axis: axis, span: span(for: frame))
-                if let d = Self.shift(from: bandPrevious, to: bandCurrent), d != 0 {
-                    bandResolved = true
-                    lastLines = bandPrevious
-                    lastProfiles = nil
-                    lines = bandCurrent
-                    sideFill = Self.sideFill(of: previous, axis: axis, band: changed)
-                } else {
-                    band = nil   // 认不出来：照旧整行处理
-                }
-            }
+        if !bandResolved, first != nil, let found = adoptScrollingBand(previous, frame) {
+            bandResolved = true
+            lines = found
         }
 
         var shift = Self.shift(from: lastLines, to: lines)
@@ -197,8 +188,26 @@ struct ScrollStitcher {
                                        frames: (previous, frame), axis: axis, span: span(for: frame), inner: inner)
         }
         // 刚才一直往下滚，这一帧却「往回跳了大半屏」（或者反过来）：多半是相似的内容在很窄的重叠里凑巧对上，不可信
-        if let d = shift, let p = recentShift, (p > 0 && d < -lines.count / 2) || (p < 0 && d > lines.count / 2) {
-            shift = nil
+        func implausible(_ d: Int) -> Bool {
+            guard let p = recentShift else { return false }
+            return (p > 0 && d < -lines.count / 2) || (p < 0 && d > lines.count / 2)
+        }
+        if let d = shift, implausible(d) { shift = nil }
+        // 整行对不上：也许是两侧有边栏（或者边栏刚停住、范围变了），整行比对被它拖住了。
+        // 找出这一对画面里真正在滚动的那几列，只用它们再比对一次；对上了就以后都按这个范围
+        if shift == nil, first == nil {
+            let saved = (band, sideFill, lastLines, lastProfiles)
+            if let found = adoptScrollingBand(previous, frame), let d = Self.shift(from: lastLines, to: found)
+                ?? Self.tolerantShift(previous: (lastLines, Self.profiles(of: previous, axis: axis, span: span(for: previous))),
+                                      current: (found, Self.profiles(of: frame, axis: axis, span: span(for: frame))), prior: recentShift,
+                                      frames: (previous, frame), axis: axis, span: span(for: frame), inner: nil),
+               d != 0, !implausible(d) {
+                lines = found
+                profiles = nil
+                shift = d
+            } else {
+                (band, sideFill, lastLines, lastProfiles) = saved
+            }
         }
         guard let shift else {
             // 对不上：保留上一帧，等用户滚回能对上的位置
@@ -231,6 +240,10 @@ struct ScrollStitcher {
         bandResolved = true
         recentShift = shift
         footerLength = footer
+        // 每次滚动都重新确认两侧哪些列是不跟着滚动的边栏（第一次认错也能纠正过来）
+        if updateSidebars(previous, frame, shift: shift, rows: header..<scrollEnd) {
+            lines = Self.lines(of: frame, axis: axis, span: span(for: frame))
+        }
         if let firstFrame = first {
             // 第一次滚动：第一帧去掉末尾固定部分，作为开头；顶部固定部分以后不再覆盖
             headerLength = header
@@ -299,6 +312,108 @@ struct ScrollStitcher {
 
     /// 连续这么多帧对不上、页面还在往前滚，就从当前画面接回（帧只在画面变化时才来，大约是滚动中的四分之一秒）
     static let outrunFrames = 15
+
+    /// 找出这一对画面里真正在滚动的那一段（两侧是不动的边栏），而且只用这一段能认出滚动：
+    /// 采用它（以后只比对、只拼接这一段，边栏用背景色延伸），上一帧的指纹换成这一段的，返回当前帧这一段的指纹
+    private mutating func adoptScrollingBand(_ previous: PixelFrame, _ frame: PixelFrame) -> [Line]? {
+        guard let changed = scrollingSpan(previous, frame) else { return nil }
+        let full = lineCrossCount(frame)
+        guard changed.count >= full * 15 / 100, changed.count <= full * 95 / 100, changed != band else { return nil }
+        let saved = band
+        band = changed
+        let span = span(for: frame)
+        let bandPrevious = Self.lines(of: previous, axis: axis, span: span)
+        let bandCurrent = Self.lines(of: frame, axis: axis, span: span)
+        // 逐像素对不上（平滑滚动停在半个像素上、颜色转换的抖动）时，用容差比对再认一次
+        var d = Self.shift(from: bandPrevious, to: bandCurrent)
+        if d == nil {
+            d = Self.tolerantShift(previous: (bandPrevious, Self.profiles(of: previous, axis: axis, span: span)),
+                                   current: (bandCurrent, Self.profiles(of: frame, axis: axis, span: span)), prior: nil,
+                                   frames: (previous, frame), axis: axis, span: span, inner: nil)
+        }
+        guard let d, d != 0 else {
+            band = saved   // 认不出来：照旧
+            return nil
+        }
+        lastLines = bandPrevious
+        lastProfiles = nil
+        sideFill = Self.sideFill(of: previous, axis: axis, band: changed)
+        sideColumn = (0..<full).map { !changed.contains($0) }
+        sideStreak = [Int](repeating: 0, count: full)
+        contentStreak = [Int](repeating: 0, count: full)
+        return bandCurrent
+    }
+
+    /// 两侧的边栏：每次滚动，逐列看这一列是跟着滚动了（正文），还是没跟着滚动（不动的边栏、边栏里转圈的图标、
+    /// 闪烁的光标、刷新的数字）。连续 3 次没跟着滚动才算边栏；连续 2 次跟着滚动就算回正文（宁可多拼，不丢内容）。
+    /// 纯色的空白列两种都说得通，不改变原来的判断。从选区两边往里，连成一片的边栏列就是边栏：
+    /// 只保留第一屏的样子，往下用它的背景色延伸。
+    /// 判断用的是这次滚动前后都看得到、又不在顶部和底部固定栏里的那些行，按「有多少行对得上」而不是平均差别，
+    /// 半透明的标题栏、浮着的提示之类只占几行，不会把正文误判成边栏。返回 true 表示边栏范围变了
+    private mutating func updateSidebars(_ previous: PixelFrame, _ frame: PixelFrame, shift d: Int, rows: Range<Int>) -> Bool {
+        let crossCount = lineCrossCount(frame)
+        if sideColumn.count != crossCount {
+            sideColumn = (0..<crossCount).map { c in band.map { !$0.contains(c) } ?? false }
+            sideStreak = [Int](repeating: 0, count: crossCount)
+            contentStreak = [Int](repeating: 0, count: crossCount)
+        }
+        let low = max(rows.lowerBound, -d), high = min(rows.upperBound, rows.upperBound - d, lineCount(frame) - d)
+        guard high - low >= 8 else { return false }
+        let step = max(1, (high - low) / 160)
+        let bpr = frame.bytesPerRow
+        let vertical = axis == .vertical
+        var follows = [Bool](repeating: false, count: crossCount), still = [Bool](repeating: false, count: crossCount)
+        previous.data.withUnsafeBytes { prevRaw in
+            frame.data.withUnsafeBytes { curRaw in
+                guard let pb = prevRaw.baseAddress, let cb = curRaw.baseAddress else { return }
+                func pixel(_ base: UnsafeRawPointer, _ c: Int, _ i: Int) -> UInt32 {
+                    base.loadUnaligned(fromByteOffset: vertical ? i * bpr + c * 4 : c * bpr + i * 4, as: UInt32.self)
+                }
+                func near(_ a: UInt32, _ b: UInt32) -> Bool {
+                    if a == b { return true }
+                    for k in stride(from: 0, to: 24, by: 8) where abs(Int((a >> UInt32(k)) & 0xff) - Int((b >> UInt32(k)) & 0xff)) > 6 {
+                        return false
+                    }
+                    return true
+                }
+                for c in 0..<crossCount {
+                    var moved = 0, stayed = 0, total = 0
+                    var i = low
+                    while i < high {
+                        let now = pixel(cb, c, i)
+                        if near(now, pixel(pb, c, i + d)) { moved += 1 }
+                        if near(now, pixel(pb, c, i)) { stayed += 1 }
+                        total += 1
+                        i += step
+                    }
+                    follows[c] = moved * 5 >= total * 4
+                    still[c] = stayed * 5 >= total * 4
+                }
+            }
+        }
+        for c in 0..<crossCount {
+            if follows[c], still[c] { continue }   // 空白：两种都说得通
+            if follows[c] {
+                contentStreak[c] += 1
+                sideStreak[c] = 0
+                if contentStreak[c] >= 2 { sideColumn[c] = false }
+            } else {
+                sideStreak[c] += 1
+                contentStreak[c] = 0
+                if sideStreak[c] >= 3 { sideColumn[c] = true }
+            }
+        }
+        var left = 0
+        while left < crossCount, sideColumn[left] { left += 1 }
+        var right = 0
+        while right < crossCount - left, sideColumn[crossCount - 1 - right] { right += 1 }
+        var proposed: Range<Int>? = left == 0 && right == 0 ? nil : left..<(crossCount - right)
+        if let p = proposed, p.count < crossCount * 15 / 100 { proposed = band }   // 剩下的太窄：不可信，保持原样
+        guard proposed != band else { return false }
+        band = proposed
+        if let proposed { sideFill = Self.sideFill(of: previous, axis: axis, band: proposed) }
+        return true
+    }
 
     /// 用当前帧覆盖已拼好、仍在选区里的那部分内容（顶部、底部固定部分除外）
     private mutating func refresh(from frame: PixelFrame) {

@@ -21,6 +21,14 @@ final class LongCaptureOverlay: NSPanel {
         contentView = OverlayContent(frame: CGRect(origin: .zero, size: screen.frame.size), region: local)
     }
 
+    #if DEBUG
+    /// 自测：提示条的位置（这块屏幕内的坐标）
+    var debugMessageFrame: CGRect? {
+        guard let message, let content = contentView as? OverlayContent else { return nil }
+        return content.pillFrame(for: message)
+    }
+    #endif
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
@@ -35,6 +43,32 @@ final class LongCaptureOverlay: NSPanel {
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+        static func attributed(_ message: String) -> NSAttributedString {
+            NSAttributedString(string: message, attributes: [
+                .font: roundedFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: NSColor.white,
+            ])
+        }
+
+        /// 提示条的位置：选区上方居中；上方放不下就放在左边或右边（竖向居中）；都放不下就不显示
+        func pillFrame(for message: String) -> CGRect? {
+            let text = Self.attributed(message)
+            let maxWidth: CGFloat = 520
+            let textSize = text.boundingRect(with: CGSize(width: maxWidth, height: 200), options: [.usesLineFragmentOrigin]).size
+            let size = CGSize(width: ceil(textSize.width) + 36, height: ceil(textSize.height) + 22)
+            let gap: CGFloat = 12, margin: CGFloat = 8
+            let usable = bounds.insetBy(dx: margin, dy: margin)
+            let x = min(max(region.midX - size.width / 2, usable.minX), usable.maxX - size.width)
+            let above = CGRect(x: x, y: region.maxY + gap, width: size.width, height: size.height)
+            if usable.contains(above) { return above }
+            let y = min(max(region.midY - size.height / 2, usable.minY), usable.maxY - size.height)
+            let left = CGRect(x: region.minX - gap - size.width, y: y, width: size.width, height: size.height)
+            if usable.contains(left) { return left }
+            let right = CGRect(x: region.maxX + gap, y: y, width: size.width, height: size.height)
+            if usable.contains(right) { return right }
+            return nil
+        }
+
         override func draw(_ dirtyRect: NSRect) {
             // 选区外变暗
             let dim = NSBezierPath(rect: bounds)
@@ -47,16 +81,12 @@ final class LongCaptureOverlay: NSPanel {
             let border = NSBezierPath(rect: region.insetBy(dx: -1, dy: -1))
             border.lineWidth = 2
             border.stroke()
-            guard let message else { return }
-            // 提示：选区中间偏上的深色胶囊
-            let text = NSAttributedString(string: message, attributes: [
-                .font: roundedFont(ofSize: 15, weight: .semibold),
-                .foregroundColor: NSColor.white,
-            ])
-            let maxWidth = max(160, min(region.width - 24, 520))
+            guard let message, let pill = pillFrame(for: message) else { return }
+            // 提示：选区外面的深色胶囊。不能画在选区里：万一被截进画面，就会盖在正文上、不跟着滚动，
+            // 拼接会因此认不出哪几列在滚动（左右边栏被一段段重复拼上），提示条本身也会留在长图里
+            let text = Self.attributed(message)
+            let maxWidth = pill.width - 36
             let textSize = text.boundingRect(with: CGSize(width: maxWidth, height: 200), options: [.usesLineFragmentOrigin]).size
-            let pill = CGRect(x: region.midX - textSize.width / 2 - 18, y: region.midY - textSize.height / 2 - 11,
-                              width: ceil(textSize.width) + 36, height: ceil(textSize.height) + 22)
             NSColor(srgbRed: 0.18, green: 0.13, blue: 0.10, alpha: 0.82).setFill()
             NSBezierPath(roundedRect: pill, xRadius: 12, yRadius: 12).fill()
             text.draw(with: CGRect(x: pill.minX + 18, y: pill.minY + 11, width: maxWidth, height: textSize.height),
