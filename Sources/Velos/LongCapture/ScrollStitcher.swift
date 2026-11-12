@@ -194,13 +194,23 @@ struct ScrollStitcher {
             return .unchanged
         }
 
-        bandResolved = true
         let n = lines.count
-        footerLength = Self.footer(previous: lastLines, current: lines, shift: shift)
-        let scrollEnd = n - footerLength
+        let footer = Self.footer(previous: lastLines, current: lines, shift: shift)
+        let scrollEnd = n - footer
+        let header = first != nil ? min(Self.header(previous: lastLines, current: lines, shift: shift), scrollEnd) : headerLength
+        // 滚动的部分和已拼好的内容必须还有重叠：新帧滚动部分的开头不能越过已拼好的末尾。
+        // 越过了说明这个距离是误认的（真正滚过的距离比整个滚动部分还长，不可能对上）——
+        // 照接的话会把顶部固定的标题栏当成新内容接上去，或者接错位置。当作对不上，等用户滚回来
+        let baseEnd = first != nil ? scrollEnd : committedEnd
+        let basePosition = first != nil ? 0 : position
+        guard baseEnd - (basePosition + shift) >= header else {
+            return Self.mostlySame(lastLines, lines) ? .unchanged : .lost
+        }
+        bandResolved = true
+        footerLength = footer
         if let firstFrame = first {
             // 第一次滚动：第一帧去掉末尾固定部分，作为开头；顶部固定部分以后不再覆盖
-            headerLength = min(Self.header(previous: lastLines, current: lines, shift: shift), scrollEnd)
+            headerLength = header
             content = Data()
             content.reserveCapacity(scrollEnd * cross * 4 * 4)
             Self.copy(firstFrame, axis: axis, lines: 0..<scrollEnd, into: &content, at: 0)
@@ -214,8 +224,8 @@ struct ScrollStitcher {
         lastProfiles = profiles
         refresh(from: frame)
 
-        // 当前帧露出了已拼好的末尾之后的内容：接上
-        let start = max(0, committedEnd - position)
+        // 当前帧露出了已拼好的末尾之后的内容：接上（顶部固定的部分永远不接，上面已经保证不会越过它）
+        let start = max(headerLength, committedEnd - position)
         guard start < scrollEnd else { return .moved }
         var range = start..<scrollEnd
         let room = maxLength - committedEnd - footerLength

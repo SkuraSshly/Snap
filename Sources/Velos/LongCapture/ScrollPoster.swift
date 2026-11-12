@@ -21,7 +21,8 @@ final class ScrollGesture {
         guard amount != 0 else { return }
         // 告诉限速：这个是自己发的，放过（不能用事件标记，平滑滚动工具会把带标记的事件丢掉）
         LongCaptureScrollTap.current?.expectOwn(amount)
-        post(amount, phase: began ? Self.changed : Self.began, at: location)
+        // 系统会按「自然滚动」再反转一次时，先反过来发，到达时正好是 amount
+        post(amount * (LongCaptureScrollTap.current?.postSign ?? 1), phase: began ? Self.changed : Self.began, at: location)
         began = true
     }
 

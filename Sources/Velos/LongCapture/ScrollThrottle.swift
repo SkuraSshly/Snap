@@ -71,8 +71,11 @@ struct ScrollThrottle {
 final class LongCaptureScrollTap {
     /// 正在工作的限速（长截图期间只有一个）：自己补发的事件要先登记，拦截时放过
     private(set) static weak var current: LongCaptureScrollTap?
-    /// 登记过、马上会经过这里的自己发的滚动量
+    /// 登记过、马上会经过这里的自己发的滚动量（到这里时应该是的数值）
     private var ownAmounts: [Int64] = []
+    /// 发滚动事件时乘的符号：开着「自然滚动」时，系统会把发出去的像素滚动再反转一次（和真的触控板一样），
+    /// 所以要先反过来发。按用户自己滚动事件上的标记先猜，再按自己发的事件实际到这里的数值校正
+    private(set) var postSign: Int32 = 1
     /// 补发积压时用的手势（开始 → 进行中 → 结束）
     private var drainGesture: ScrollGesture?
 
@@ -84,6 +87,7 @@ final class LongCaptureScrollTap {
     private static let pointsPerLine = 40.0
     /// 记录前几个滚轮事件的数值（日志里只有数字，便于调整换算）
     private var loggedWheelEvents = 0
+    private var directionChecked = false
     /// 选区（Quartz 全局坐标：原点在主屏左上角）
     private let region: CGRect
     let axis: ScrollAxis
@@ -146,10 +150,22 @@ final class LongCaptureScrollTap {
             : (.scrollWheelEventPointDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventDeltaAxis2)
         let delta = Double(event.getIntegerValueField(pointField))
         let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
-        // 自己发的（补发积压）：已经控制过速度，原样放过
-        if continuous, delta != 0, let index = ownAmounts.firstIndex(of: Int64(delta)) {
-            ownAmounts.remove(at: index)
-            return Unmanaged.passUnretained(event)
+        // 自己发的（补发积压）：已经控制过速度，放过
+        if continuous, delta != 0 {
+            if let index = ownAmounts.firstIndex(of: Int64(delta)) {
+                ownAmounts.remove(at: index)
+                return Unmanaged.passUnretained(event)
+            }
+            if let index = ownAmounts.firstIndex(of: -Int64(delta)) {
+                // 到这里方向反了（系统按「自然滚动」又反转了一次）：这个事件就地改回来，以后反着发
+                ownAmounts.remove(at: index)
+                postSign = -postSign
+                Log.capture.notice("长截图：补发的滚动被系统反转，改为反向发送")
+                event.setIntegerValueField(pointField, value: -Int64(delta))
+                event.setDoubleValueField(fixedField, value: -event.getDoubleValueField(fixedField))
+                event.setIntegerValueField(lineField, value: -event.getIntegerValueField(lineField))
+                return Unmanaged.passUnretained(event)
+            }
         }
         if !continuous {
             // 普通鼠标滚轮（一格一格的）：事件里的数值和页面实际滚多远对不上——各 App 每格滚的距离不同，还会自己加滚动动画，
@@ -161,6 +177,11 @@ final class LongCaptureScrollTap {
             if loggedWheelEvents < 3 {
                 loggedWheelEvents += 1
                 Log.capture.notice("长截图：鼠标滚轮 行 \(event.getIntegerValueField(lineField)) 定点 \(lines) 点 \(delta) → \(points) 点")
+            }
+            if !directionChecked {
+                directionChecked = true
+                // 用户的滚轮事件已经按「自然滚动」反转过：自己发的像素滚动系统还会再反转一次，先反过来发
+                if NSEvent(cgEvent: event)?.isDirectionInvertedFromDevice == true { postSign = -1 }
             }
             throttle.queue(points, now: ProcessInfo.processInfo.systemUptime)
             return nil
