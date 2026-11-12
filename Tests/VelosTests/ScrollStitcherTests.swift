@@ -143,6 +143,113 @@ import Testing
         #expect(Self.rows(of: image).count == header + visible + 40 + footer)
     }
 
+    // MARK: - 一下滚太远
+
+    /// 选区里大片不动（上下各有很高的固定区域），中间只有一窄条在滚：一下滚太远、和上一帧没有重叠时，
+    /// 不能因为「大部分行没变」就当成原地重画，把错位的画面写进去——之后会接错位置，已经截过的内容又被接一遍。
+    /// 应该报告对不上；用户往回滚到能对上的位置后，接着正常拼接
+    @Test func 大片不动时一下滚太远不会拼错() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let header = 120, footer = 120, visible = 60
+        func at(_ offset: Int) -> PixelFrame { Self.window(offset: offset, height: visible, header: header, footer: footer) }
+        stitcher.add(at(0))
+        stitcher.add(at(5))
+        stitcher.add(at(10))
+        #expect(stitcher.add(at(300)) == .lost)
+        #expect(stitcher.add(at(305)) == .lost)
+        #expect(stitcher.add(at(15)) == .appended(5))
+        #expect(stitcher.add(at(20)) == .appended(5))
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<header).map { Self.pageRow($0, seed: 1) } + (0..<(visible + 20)).map { Self.pageRow($0) }
+            + (0..<footer).map { Self.pageRow($0, seed: 2) }
+        #expect(Self.rows(of: image) == expected)
+    }
+
+    /// 还没开始滚动时第一下就滚太远：也是对不上，不能把那一帧当成新的起点（否则开头和后面接不上）
+    @Test func 第一下就滚太远时等滚回来再接() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let header = 120, footer = 120, visible = 60
+        func at(_ offset: Int) -> PixelFrame { Self.window(offset: offset, height: visible, header: header, footer: footer) }
+        stitcher.add(at(0))
+        #expect(stitcher.add(at(400)) == .lost)
+        #expect(stitcher.add(at(8)) == .appended(8))
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<header).map { Self.pageRow($0, seed: 1) } + (0..<(visible + 8)).map { Self.pageRow($0) }
+            + (0..<footer).map { Self.pageRow($0, seed: 2) }
+        #expect(Self.rows(of: image) == expected)
+    }
+
+    // MARK: - 跟丢后接回
+
+    /// 往下滚时一下甩得太远、和上一次对上的画面没有重叠，而且还在继续往下滚：不用往回滚，
+    /// 过一小会儿自动从当前画面接着拼，中间没截到的部分直接跳过（不重复、不错位）
+    @Test func 往下甩太远时自动从当前画面接回() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let height = 100
+        for offset in [0, 10, 20] { stitcher.add(Self.window(offset: offset, height: height)) }
+        var events: [ScrollStitcher.Event] = []
+        let far = (0..<ScrollStitcher.outrunFrames).map { 600 + $0 * 4 }
+        for offset in far { events.append(stitcher.add(Self.window(offset: offset, height: height))) }
+        #expect(events.dropLast().allSatisfy { $0 == .lost })
+        #expect(events.last == .appended(height))
+        let resumed = far.last!
+        #expect(stitcher.add(Self.window(offset: resumed + 7, height: height)) == .appended(7))
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<(height + 20)).map { Self.pageRow($0) } + (resumed..<(resumed + height + 7)).map { Self.pageRow($0) }
+        #expect(Self.rows(of: image) == expected)
+    }
+
+    /// 往回甩太远（回到已经拼过的地方）：不能从当前画面接上（那样会重复），一直等到滚回能对上的位置
+    @Test func 往回甩太远时不接() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let height = 100
+        for offset in stride(from: 0, through: 400, by: 20) { stitcher.add(Self.window(offset: offset, height: height)) }
+        let length = stitcher.length
+        for offset in stride(from: 150, to: 150 - ScrollStitcher.outrunFrames * 2 * 3, by: -3) {
+            #expect(stitcher.add(Self.window(offset: offset, height: height)) != .appended(height))
+        }
+        #expect(stitcher.length == length)
+        #expect(stitcher.add(Self.window(offset: 420, height: height)) == .appended(20))
+        let image = try #require(stitcher.makeImage())
+        #expect(Self.rows(of: image) == (0..<(420 + height)).map { Self.pageRow($0) })
+    }
+
+    // MARK: - 半透明的顶栏、底栏
+
+    /// 页面从 offset 行开始、可见 height 行；最上面 top 行、最下面 bottom 行被半透明的栏盖住：
+    /// 栏不跟着滚动，但底下的内容透上来，每一帧都不一样（和哪一帧的内容也对不上）
+    static func translucentWindow(offset: Int, height: Int, top: Int, bottom: Int) -> PixelFrame {
+        frame((0..<height).map { i in
+            if i < top { return pageRow(i * 13 + offset * 101, seed: 7) }
+            if i >= height - bottom { return pageRow(i * 17 + offset * 103, seed: 8) }
+            return pageRow(offset + i)
+        })
+    }
+
+    /// 半透明的顶栏（例如聊天软件对话区上方的磨砂标题栏）只在最上面出现一次，不会每滚一下就在长图里留下一段
+    @Test func 半透明的顶栏不会一段段重复() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let top = 10, height = 100
+        for step in 0...12 { stitcher.add(Self.translucentWindow(offset: step * 9, height: height, top: top, bottom: 0)) }
+        let image = try #require(stitcher.makeImage())
+        let expected = (0..<top).map { Self.pageRow($0 * 13, seed: 7) } + (top..<(height + 12 * 9)).map { Self.pageRow($0) }
+        #expect(stitcher.length == expected.count)
+        #expect(Self.rows(of: image) == expected)
+    }
+
+    /// 半透明的底栏（例如磨砂的输入框）只在末尾出现一次（取最后一帧的样子）
+    @Test func 半透明的底栏只在末尾出现一次() throws {
+        var stitcher = ScrollStitcher(axis: .vertical)
+        let bottom = 12, height = 100
+        for step in 0...12 { stitcher.add(Self.translucentWindow(offset: step * 9, height: height, top: 0, bottom: bottom)) }
+        let image = try #require(stitcher.makeImage())
+        let last = 12 * 9
+        let expected = (0..<(height - bottom + last)).map { Self.pageRow($0) }
+            + ((height - bottom)..<height).map { Self.pageRow($0 * 17 + last * 103, seed: 8) }
+        #expect(stitcher.length == expected.count)
+        #expect(Self.rows(of: image) == expected)
+    }
+
     // MARK: - 固定的边栏
 
     /// 左边 40 列是滚动的正文，右边 24 列是不动的边栏（每行内容不同）；

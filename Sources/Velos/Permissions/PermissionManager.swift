@@ -5,14 +5,12 @@ import CoreGraphics
 /// 统一管理系统权限：
 /// - 屏幕与系统录音（必需）：截图、录屏、录制系统声音都依赖它
 /// - 麦克风（可选）：只有录屏时录麦克风才需要
-/// - 辅助功能（可选）：只有长截图的滚动限速才需要（调整发给别的 App 的滚动事件）
 @MainActor
 final class PermissionManager: ObservableObject {
     static let shared = PermissionManager()
 
     @Published private(set) var screenRecordingGranted = false
     @Published private(set) var microphoneStatus: AVAuthorizationStatus = .notDetermined
-    @Published private(set) var accessibilityGranted = false
     /// 本次运行中用户已经发起过屏幕录制授权
     @Published private(set) var didRequestScreenRecording = false
 
@@ -33,17 +31,6 @@ final class PermissionManager: ObservableObject {
         if screen != screenRecordingGranted { screenRecordingGranted = screen }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
         if mic != microphoneStatus { microphoneStatus = mic }
-        let accessibility = CGPreflightPostEventAccess()
-        if accessibility != accessibilityGranted { accessibilityGranted = accessibility }
-    }
-
-    /// 请求辅助功能权限：第一次会弹出系统提示；之后打开 系统设置 › 隐私与安全性 › 辅助功能
-    func requestAccessibility() {
-        if !CGRequestPostEventAccess(),
-           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
-        refresh()
     }
 
     /// 截图 / 录屏开始前调用：有权限返回 true；没有则弹出权限引导并返回 false（不会崩溃或静默失败）

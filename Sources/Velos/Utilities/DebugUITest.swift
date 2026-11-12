@@ -1017,10 +1017,10 @@ enum DebugUITest {
             }
             check("长截图\(tag)：像素有细微差别也能接上", events == [.started, .unchanged, .appended(40), .appended(50), .moved,
                                                          .appended(60), .appended(180)], "\(events)")
-            var hinted = ScrollStitcher(axis: axis)
-            hinted.add(jittered(frame(view(0), cross: cross, axis: axis), seed: 9))
-            let e = hinted.add(jittered(frame(view(120), cross: cross, axis: axis), seed: 10), hint: 110)
-            check("长截图\(tag)：有滚轮提示时在附近找到", e == .appended(120), "\(e)")
+            var big = ScrollStitcher(axis: axis)
+            big.add(jittered(frame(view(0), cross: cross, axis: axis), seed: 9))
+            let e = big.add(jittered(frame(view(120), cross: cross, axis: axis), seed: 10))
+            check("长截图\(tag)：一下滚得较远、像素有细微差别也能接上（只看画面）", e == .appended(120), "\(e)")
         }
 
         // 滚动条：每帧右侧有个跟着移动的滑块，比对时忽略右边缘，照常精确接上；结果右边缘以外和原页面一致
@@ -1076,22 +1076,6 @@ enum DebugUITest {
             check("长截图\(tag)：两侧边栏不动也照常接上，边栏不重复", events == [.started, .appended(40), .appended(50), .appended(60),
                                                                 .appended(180)] && got == expected, "\(events) \(got.count)/\(expected.count)")
         }
-
-        // 限速：每帧最多 100 点；猛甩 2000 点，先放行 100，其余积压（最多 1200）在之后每帧补发 100
-        var throttle = ScrollThrottle(maxPerFrame: 100, frameInterval: 0.1, maxPending: 1200, now: 0)
-        let first = throttle.take(2000, now: 0)
-        var drained: [Double] = []
-        for k in 1...14 { drained.append(throttle.drain(now: Double(k) * 0.1)) }
-        check("限速：猛甩时每帧都不超过 100 点", first == 100 && drained.allSatisfy { $0 <= 100.001 }, "\(first) \(drained)")
-        check("限速：积压最多 1200 点，之后全部补发", abs(drained.reduce(0, +) - 1200) < 0.01 && throttle.pending == 0,
-              "\(drained.reduce(0, +))")
-        _ = throttle.take(500, now: 2.0)
-        let reverse = throttle.take(-30, now: 2.0)
-        // 这一帧的额度已经用完：反向的 30 点留到下一帧发，原来积压的 400 点丢掉
-        check("限速：反向滚动时丢掉没补发的部分", reverse == 0 && throttle.pending == -30, "\(throttle.pending) \(reverse)")
-        var gentle = ScrollThrottle(maxPerFrame: 100, frameInterval: 0.1, maxPending: 1200, now: 0)
-        let slow = (1...10).map { gentle.take(40, now: Double($0) * 0.1) }
-        check("限速：正常速度的滚动原样放行", slow.allSatisfy { $0 == 40 } && gentle.pending == 0)
 
         // 2. 界面：屏幕中间 320×240 的选区，下面垫合成的桌面；画面直接喂合成的，不截真实屏幕
         guard let screen = NSScreen.main, let desktop = DebugShowcase.desktopImage(for: screen) else {
@@ -2347,15 +2331,13 @@ final class MockLLMServer: URLProtocol, @unchecked Sendable {
 }
 #endif
 #if DEBUG
-/// 测试版第一次运行：申请屏幕录制、辅助功能权限（系统设置里显示「Velos 测试版」），把结果写进文件后退出。
+/// 测试版第一次运行：申请屏幕录制权限（系统设置里显示「Velos 测试版」），把结果写进文件后退出。
 /// 用法：open --env VELOS_REQUEST_SCREEN=/输出目录 build/Velos.app
 enum DebugPermissionRequest {
     static func runIfRequested() {
         guard let path = ProcessInfo.processInfo.environment["VELOS_REQUEST_SCREEN"] else { return }
         let granted = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
-        // 长截图的滚动限速要用：同时申请辅助功能
-        let accessibility = CGPreflightPostEventAccess() || CGRequestPostEventAccess()
-        try? "屏幕录制权限：\(granted)，辅助功能：\(accessibility)".write(to: URL(fileURLWithPath: path).appendingPathComponent("result.txt"),
+        try? "屏幕录制权限：\(granted)".write(to: URL(fileURLWithPath: path).appendingPathComponent("result.txt"),
                                           atomically: true, encoding: .utf8)
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))

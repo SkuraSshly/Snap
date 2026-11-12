@@ -3,7 +3,6 @@ import SwiftUI
 /// 截图：格式、画面、完成后的行为、长截图
 struct ScreenshotSettingsView: View {
     @ObservedObject private var prefs = Preferences.shared
-    @ObservedObject private var permissions = PermissionManager.shared
 
     var body: some View {
         SettingsPane {
@@ -53,32 +52,16 @@ struct ScreenshotSettingsView: View {
                     .disabled(!prefs.screenshotShowThumbnail || !prefs.screenshotCopyToClipboard)
             }
 
-            SettingsSection(title: "长截图", footer: longCaptureFooter) {
-                SwitchRow(icon: "gauge.with.dots.needle.33percent", tint: .apricot, title: "滚动限速",
-                          caption: "快速滚动时自动放慢，滚多快都不会漏掉内容", isFirst: true, isOn: $prefs.longCaptureThrottle)
-                SettingsRow(icon: "", title: "限速", indented: true) {
-                    WarmSegmented(options: ScrollSpeed.allCases.map { ($0, $0.title) }, selection: $prefs.longCaptureThrottleSpeed,
-                                  segmentWidth: 52)
-                }
-                .disabled(!prefs.longCaptureThrottle)
-                .opacity(prefs.longCaptureThrottle ? 1 : 0.5)
-                if !permissions.accessibilityGranted {
-                    SettingsRow(icon: "hand.raised.fill", tint: .chipHoney, title: "需要「辅助功能」权限",
-                                caption: "滚动限速需要；没有权限时长截图照常可用，只是要慢慢滚") {
-                        Button("去允许") { permissions.requestAccessibility() }
-                            .buttonStyle(WarmButtonStyle())
-                    }
+            SettingsSection(title: "长截图") {
+                SettingsRow(icon: "scissors", tint: .apricot, title: "使用方法", caption: longCaptureFooter, isFirst: true) {
+                    EmptyView()
                 }
             }
-        }
-        .onAppear { permissions.refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            permissions.refresh()
         }
     }
 
     private var longCaptureFooter: String {
-        "按 \(prefs.screenshotHotkey.displayString) 框选区域后，点工具栏上的长截图按钮，在选区里滚动页面即可（Esc 取消）。最长 20000 像素。"
+        "按 \(prefs.screenshotHotkey.displayString) 框选区域后，点工具栏上的长截图按钮，在选区里滚动页面即可（Esc 取消）。滚得太快跟丢时会自动接回。最长 20000 像素。"
     }
 
     private var footer: String? {

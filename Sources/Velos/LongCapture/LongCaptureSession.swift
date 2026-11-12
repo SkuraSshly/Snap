@@ -5,7 +5,8 @@ import Carbon.HIToolbox
 ///
 /// - 截图界面关闭，焦点还给原来的 App；选区外变暗、选区加边框（都不拦截鼠标），你在选区里滚动页面，Velos 边滚边拼接
 /// - 控制条：竖向 / 横向、取消、编辑、钉图、保存、完成；旁边有拼接结果的实时预览
-/// - 滚动限速：快速滚动时自动放慢，保证不漏内容；需要「辅助功能」权限（不给的话照常可用，只是不限速）
+/// - 不碰滚动：不拦截、不限速、不读取滚轮事件，鼠标、触控板和装的任何滚动工具都照常工作；
+///   拼接只看截到的画面（每秒最多 60 帧），滚得太快跟丢时自动从当前画面接回
 /// - 完成后和普通截图一样：复制到剪贴板、显示缩略图（可以继续标注、保存、钉图）
 @MainActor
 final class LongCaptureSession {
@@ -26,12 +27,6 @@ final class LongCaptureSession {
     /// 换过几次方向（和采集那边的 generation 对应，旧一轮的结果不要）
     private var generation = 0
 
-    /// 有「辅助功能」权限时：把猛甩拆成小段滚动，滚多快都接得上
-    private var scrollTap: LongCaptureScrollTap?
-    /// 看滚轮滚了多少（只看不改，不需要权限），告诉拼接大概滚了多少
-    private var scrollMonitor: Any?
-    /// 还没有权限时：每秒看一次，一给权限就装上限速
-    private var permissionTimer: Timer?
     /// 长截图期间的 Esc（焦点在被截的 App 里，只能注册成全局快捷键）
     private var escapeKey: UInt32?
 
@@ -53,7 +48,6 @@ final class LongCaptureSession {
         bar.onDone = { [weak self] in self?.complete(.done) }
         bar.onEdit = { [weak self] in self?.complete(.edit) }
         bar.onPin = { [weak self] in self?.complete(.pin) }
-        installScrollWatchers()
         escapeKey = HotkeyManager.shared.addTemporary(keyCode: kVK_Escape) { [weak self] in self?.cancel() }
         overlay.message = hint
         overlay.orderFrontRegardless()
@@ -81,57 +75,6 @@ final class LongCaptureSession {
     /// 开始时唯一的一条提示（之后滚动的过程中都不再出提示，界面保持干净）
     private var hint: String {
         "请缓慢\(axis == .vertical ? "向下" : "向右")滚动页面，Velos 边滚边拼接"
-    }
-
-    /// 监听滚轮（给拼接提示滚动量），有权限时再装上限速
-    private func installScrollWatchers() {
-        scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, self.region.contains(NSEvent.mouseLocation) else { return }
-                let delta = self.axis == .vertical ? event.scrollingDeltaY : event.scrollingDeltaX
-                self.engine.addScrollHint(delta, precise: event.hasPreciseScrollingDeltas)
-            }
-        }
-        // 限速要「辅助功能」权限：没有时请求一次（系统只在第一次弹出提示），之后一给权限就装上
-        if Preferences.shared.longCaptureThrottle, !CGPreflightPostEventAccess() {
-            _ = CGRequestPostEventAccess()
-            permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
-                MainActor.assumeIsolated {
-                    guard let self, CGPreflightPostEventAccess() else { return }
-                    timer.invalidate()
-                    self.permissionTimer = nil
-                    self.installThrottle()
-                }
-            }
-        }
-        installThrottle()
-    }
-
-    /// 限速：只有给了「辅助功能」权限才装得上
-    private func installThrottle() {
-        scrollTap?.stop()
-        scrollTap = nil
-        guard Preferences.shared.longCaptureThrottle, CGPreflightPostEventAccess() else { return }
-        let extent = axis == .vertical ? region.height : region.width
-        scrollTap = LongCaptureScrollTap(region: cgRegion, axis: axis, extent: extent,
-                                         framesPerSecond: screen.maximumFramesPerSecond,
-                                         speed: Preferences.shared.longCaptureThrottleSpeed.factor)
-        Log.capture.notice("长截图：滚动限速\(self.scrollTap == nil ? "不可用" : "已开启", privacy: .public)")
-    }
-
-    private func removeScrollWatchers() {
-        permissionTimer?.invalidate()
-        permissionTimer = nil
-        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
-        scrollMonitor = nil
-        scrollTap?.stop()
-        scrollTap = nil
-    }
-
-    /// 选区（Quartz 全局坐标：原点在主屏左上角）
-    private var cgRegion: CGRect {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
-        return CGRect(x: region.minX, y: primaryHeight - region.maxY, width: region.width, height: region.height)
     }
 
     // MARK: - 拼接进度
@@ -163,7 +106,6 @@ final class LongCaptureSession {
         length = 0
         bar.setLength(0, axis: newAxis, scale: scale)
         preview.show([], axis: newAxis)
-        if scrollTap != nil { installThrottle() }   // 限速按新方向重新装
         overlay.message = nil
         placeChrome()
     }
@@ -213,7 +155,6 @@ final class LongCaptureSession {
     }
 
     private func close() {
-        removeScrollWatchers()
         if let escapeKey { HotkeyManager.shared.removeTemporary(escapeKey) }
         escapeKey = nil
         engine.onUpdate = nil
