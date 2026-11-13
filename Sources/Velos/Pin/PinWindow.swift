@@ -10,9 +10,7 @@ enum ScrollAxis: Sendable {
 /// 钉在屏幕上的截图：置顶的浮动小窗。
 /// - 单击选中（杏色边框），选中后按 Esc 关闭、⌘C 复制；双击直接关闭
 /// - 拖动移动；滚轮 / 触控板双指捏合缩放（以鼠标位置为中心）
-/// - 拖边缘、四个角调整大小：保持长宽比，对面的边 / 角不动（边缘上是暖色的调整大小光标）。
-///   窗口比图大一圈（四周各 gripMargin 点，几乎全透明）：钉图常常正好盖在同样大小的 App 窗口上，
-///   那个窗口的边缘向外还有几点能拖动调整大小，没有这一圈的话，抓边缘时稍微偏外就抓到了下面的窗口
+/// - 拖边缘、四个角调整大小：保持长宽比，对面的边 / 角不动（边缘上是暖色的调整大小光标）
 /// - 钉上以后自动选中（显示杏色边框，按 Esc 就能关）
 /// - 长截图：窗口只露出一段，滚轮在窗口里翻看；⌥ + 滚轮、双指捏合缩放
 /// - ⌘ + 滚轮调整透明度；右键菜单里也有透明度、原始大小、复制、存储
@@ -32,12 +30,6 @@ final class PinWindow: NSPanel {
         animationBehavior = .utilityWindow
         contentView = PinView(capture: capture, image: image)
     }
-
-    /// 图四周看不见的抓取边（点）
-    static let gripMargin: CGFloat = 6
-
-    /// 图本身在屏幕上的位置和大小（窗口去掉四周的抓取边）
-    var contentFrame: CGRect { frame.insetBy(dx: Self.gripMargin, dy: Self.gripMargin) }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -75,13 +67,8 @@ final class PinWindow: NSPanel {
 final class PinView: NSView {
     private let capture: CapturedImage
     private let image: CGImage
-    /// 图所在的那一层（裁掉超出的部分：长截图只露出一段）；四周留出抓取边
-    private let contentLayer = CALayer()
     private let imageLayer = CALayer()
     private let borderLayer = CAShapeLayer()
-
-    /// 图在视图里的位置：去掉四周的抓取边
-    private var content: CGRect { bounds.insetBy(dx: PinWindow.gripMargin, dy: PinWindow.gripMargin) }
     private let indicator = PillLabel(padding: NSSize(width: 10, height: 4))
     private var indicatorTimer: Timer?
 
@@ -117,10 +104,7 @@ final class PinView: NSView {
         longAxis = Self.longAxis(for: capture.pointSize)
         super.init(frame: CGRect(origin: .zero, size: capture.pointSize))
         wantsLayer = true
-        // 四周的抓取边：几乎全透明（完全透明的地方鼠标会穿透到下面的窗口，就抓不住了）
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.004).cgColor
-        contentLayer.masksToBounds = true   // 长截图只显示窗口里的那一段
-        layer?.addSublayer(contentLayer)
+        layer?.masksToBounds = true   // 长截图只显示窗口里的那一段
 
         // 原始大小时，图层的点尺寸 × contentsScale 正好等于图像像素，一个像素对一个像素显示
         imageLayer.contents = image
@@ -128,7 +112,7 @@ final class PinView: NSView {
         imageLayer.contentsGravity = .resize
         imageLayer.minificationFilter = .trilinear   // 缩小时用三线性过滤，文字不出现锯齿
         imageLayer.magnificationFilter = .linear
-        contentLayer.addSublayer(imageLayer)
+        layer?.addSublayer(imageLayer)
 
         // 边框画在图像上层：未选中时是淡淡的白边，选中时是醒目的蓝边
         borderLayer.fillColor = nil
@@ -152,7 +136,7 @@ final class PinView: NSView {
         borderLayer.lineWidth = width
         borderLayer.strokeColor = (isSelected ? OverlayAccent.screenshot : NSColor.white.withAlphaComponent(0.35)).cgColor
         // 沿内侧描边，不超出窗口
-        borderLayer.path = CGPath(rect: content.insetBy(dx: width / 2, dy: width / 2), transform: nil)
+        borderLayer.path = CGPath(rect: bounds.insetBy(dx: width / 2, dy: width / 2), transform: nil)
         CATransaction.commit()
     }
 
@@ -174,35 +158,33 @@ final class PinView: NSView {
     /// 长截图能滚多远
     private var maxScroll: CGFloat {
         switch longAxis {
-        case .vertical: max(0, imageSize.height - content.height)
-        case .horizontal: max(0, imageSize.width - content.width)
+        case .vertical: max(0, imageSize.height - bounds.height)
+        case .horizontal: max(0, imageSize.width - bounds.width)
         case nil: 0
         }
     }
 
-    /// 图层位置（在 contentLayer 里）：普通截图铺满；长截图按滚动的距离露出对应的一段（竖向从上往下、横向从左往右）
+    /// 图层位置：普通截图铺满窗口；长截图按滚动的距离露出对应的一段（竖向从上往下、横向从左往右）
     private var imageFrame: CGRect {
-        let area = content.size
-        let size = longAxis == nil ? area : imageSize
+        let size = longAxis == nil ? bounds.size : imageSize
         switch longAxis {
-        case .vertical: return CGRect(x: 0, y: area.height - size.height + scrollOffset, width: area.width, height: size.height)
-        case .horizontal: return CGRect(x: -scrollOffset, y: 0, width: size.width, height: area.height)
-        case nil: return CGRect(origin: .zero, size: area)
+        case .vertical: return CGRect(x: 0, y: bounds.height - size.height + scrollOffset, width: bounds.width, height: size.height)
+        case .horizontal: return CGRect(x: -scrollOffset, y: 0, width: size.width, height: bounds.height)
+        case nil: return bounds
         }
     }
 
     override func layout() {
         super.layout()
-        if !zoomKnown, content.width > 0 {
-            // 第一次布局：图的大小 / 原始大小 = 当前比例（钉图可能被缩小显示，之后的缩放从这里算起）
-            zoom = longAxis == .horizontal ? content.height / capture.pointSize.height : content.width / capture.pointSize.width
+        if !zoomKnown, bounds.width > 0 {
+            // 第一次布局：窗口大小 / 原始大小 = 当前比例（钉图可能被缩小显示，之后的缩放从这里算起）
+            zoom = longAxis == .horizontal ? bounds.height / capture.pointSize.height : bounds.width / capture.pointSize.width
             zoomKnown = true
             if longAxis != nil { showIndicator("滚轮翻看，⌥ + 滚轮缩放") }
         }
         scrollOffset = min(max(scrollOffset, 0), maxScroll)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        contentLayer.frame = content
         imageLayer.frame = imageFrame
         borderLayer.frame = bounds
         CATransaction.commit()
@@ -245,15 +227,13 @@ final class PinView: NSView {
 
     // MARK: - 拖边缘调整大小
 
-    /// 鼠标下面是哪个边 / 角：图的边缘往里一小条，加上图外面那一圈抓取边；中间返回 nil（拖动是移动）
+    /// 鼠标下面是哪个边 / 角（窗口里面靠边的一圈）；中间返回 nil（拖动是移动）
     func handle(at p: CGPoint) -> RegionSelector.Handle? {
-        let c = content, w = c.width, h = c.height
+        let w = bounds.width, h = bounds.height
         let grip = min(Self.edgeGrip, w / 4, h / 4), corner = min(Self.cornerGrip, w / 3, h / 3)
-        let left = p.x <= c.minX + grip, right = p.x >= c.maxX - grip
-        let bottom = p.y <= c.minY + grip, top = p.y >= c.maxY - grip
+        let left = p.x <= grip, right = p.x >= w - grip, bottom = p.y <= grip, top = p.y >= h - grip
         guard left || right || bottom || top else { return nil }
-        let nearLeft = p.x <= c.minX + corner, nearRight = p.x >= c.maxX - corner
-        let nearBottom = p.y <= c.minY + corner, nearTop = p.y >= c.maxY - corner
+        let nearLeft = p.x <= corner, nearRight = p.x >= w - corner, nearBottom = p.y <= corner, nearTop = p.y >= h - corner
         if nearTop && nearLeft { return .topLeft }
         if nearTop && nearRight { return .topRight }
         if nearBottom && nearLeft { return .bottomLeft }
@@ -267,9 +247,8 @@ final class PinView: NSView {
     /// - 普通钉图、长截图拖角、长截图拖短边：保持长宽比缩放，对面的边 / 角不动
     /// - 长截图拖长的那个方向的边（竖着长的拖上下边）：只改窗口露出多少，不缩放
     private func resize(_ r: Resize, by d: CGSize) {
-        guard window != nil else { return }
-        let m = PinWindow.gripMargin
-        let f = r.frame.insetBy(dx: m, dy: m)   // 图本身（按下时）
+        guard let window else { return }
+        let f = r.frame
         var width = f.width, height = f.height
         switch r.handle {
         case .left, .topLeft, .bottomLeft: width -= d.width
@@ -293,7 +272,7 @@ final class PinView: NSView {
                 frame.size.width = min(max(width, Self.minimumSide), imageSize.width).rounded()
                 if r.handle == .left { frame.origin.x = f.maxX - frame.width }
             }
-            window?.setFrame(frame.insetBy(dx: -m, dy: -m), display: true)
+            window.setFrame(frame, display: true)
             return
         }
         // 缩放：拖边按这条边的方向算，拖角按动得多的那个方向算
@@ -315,8 +294,7 @@ final class PinView: NSView {
         case .bottomLeft: (1, 1)
         case .bottomRight: (0, 1)
         }
-        let c = content
-        setZoom(r.zoom * max(scale, smallest), anchor: CGPoint(x: c.minX + fx * c.width, y: c.minY + fy * c.height))
+        setZoom(r.zoom * max(scale, smallest), anchor: CGPoint(x: fx * bounds.width, y: fy * bounds.height))
     }
 
     override func updateTrackingAreas() {
@@ -375,7 +353,6 @@ final class PinView: NSView {
     /// 以 anchor（视图坐标）为中心缩放，保持该点在屏幕上的位置不变
     private func setZoom(_ newZoom: CGFloat, anchor: CGPoint) {
         guard let window else { return }
-        let m = PinWindow.gripMargin
         let clamped = newZoom.clamped(to: Self.zoomRange)
         let base = capture.pointSize
         var newSize = CGSize(width: (base.width * clamped).rounded(), height: (base.height * clamped).rounded())
@@ -390,14 +367,12 @@ final class PinView: NSView {
         }
         zoom = clamped
 
-        // 图本身：anchor 在图里的比例位置不变
-        let old = window.frame.insetBy(dx: m, dy: m)
-        let local = CGPoint(x: anchor.x - m, y: anchor.y - m)
-        let fx = old.width > 0 ? local.x / old.width : 0.5
-        let fy = old.height > 0 ? local.y / old.height : 0.5
-        let origin = CGPoint(x: old.minX + local.x - fx * newSize.width,
-                             y: old.minY + local.y - fy * newSize.height)
-        window.setFrame(CGRect(origin: origin, size: newSize).insetBy(dx: -m, dy: -m), display: true)
+        let old = window.frame
+        let fx = old.width > 0 ? anchor.x / old.width : 0.5
+        let fy = old.height > 0 ? anchor.y / old.height : 0.5
+        let origin = CGPoint(x: old.minX + anchor.x - fx * newSize.width,
+                             y: old.minY + anchor.y - fy * newSize.height)
+        window.setFrame(CGRect(origin: origin, size: newSize), display: true)
         showIndicator("\(Int((zoom * 100).rounded()))%")
     }
 
@@ -455,7 +430,7 @@ final class PinView: NSView {
     }
 
     @objc private func resetZoom() {
-        setZoom(1, anchor: CGPoint(x: content.midX, y: content.midY))
+        setZoom(1, anchor: CGPoint(x: bounds.midX, y: bounds.midY))
     }
 
     @objc private func setOpacity(_ sender: NSMenuItem) {
@@ -495,8 +470,8 @@ final class PinView: NSView {
 
     private func placeIndicator() {
         let size = indicator.frame.size
-        indicator.setFrameOrigin(CGPoint(x: (content.midX - size.width / 2).rounded(),
-                                         y: (content.midY - size.height / 2).rounded()))
+        indicator.setFrameOrigin(CGPoint(x: ((bounds.width - size.width) / 2).rounded(),
+                                         y: ((bounds.height - size.height) / 2).rounded()))
     }
 }
 

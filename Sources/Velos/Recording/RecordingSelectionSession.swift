@@ -52,9 +52,7 @@ final class RecordingSelectionSession: OverlayEventHandler {
         observe(NSApplication.didChangeScreenParametersNotification) { $0.cancel() }
 
         // 不冻屏：直接在每块屏幕上盖透明遮罩
-        selector.windows = WindowList.snapshot(
-            includingOwn: ScreenFreezer.capturableOwnWindows,
-            insetOwn: Dictionary(uniqueKeysWithValues: PinManager.shared.windowNumbers.map { ($0, PinWindow.gripMargin) }))
+        selector.windows = WindowList.snapshot(includingOwn: ScreenFreezer.capturableOwnWindows)
         for screen in NSScreen.screens {
             let id = screen.displayID
             screens[id] = screen

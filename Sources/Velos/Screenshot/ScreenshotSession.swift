@@ -116,9 +116,7 @@ final class ScreenshotSession: OverlayEventHandler {
         #endif
 
         // 窗口位置和屏幕画面在同一时刻取得，悬停识别的窗口与冻结画面对得上
-        selector.windows = WindowList.snapshot(
-            includingOwn: ScreenFreezer.capturableOwnWindows,
-            insetOwn: Dictionary(uniqueKeysWithValues: PinManager.shared.windowNumbers.map { ($0, PinWindow.gripMargin) }))
+        selector.windows = WindowList.snapshot(includingOwn: ScreenFreezer.capturableOwnWindows)
         do {
             let content = try await ScreenFreezer.shareableContent()
             guard !isFinished else { return }

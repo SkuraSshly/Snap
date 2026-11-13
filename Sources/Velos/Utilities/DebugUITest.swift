@@ -404,33 +404,28 @@ enum DebugUITest {
         // 钉图：钉在原位、原始大小；单击选中后按 Esc 关闭
         if let pin = ThumbnailManager.shared.debugPinNewest() {
             let expected = CGRect(x: o.x + 100, y: o.y + 100, width: 200, height: 150)
-            check("钉图钉在原位、原始大小", pin.contentFrame == expected, "期望 \(expected)，得到 \(pin.contentFrame)")
+            check("钉图钉在原位、原始大小", pin.frame == expected, "期望 \(expected)，得到 \(pin.frame)")
             check("钉图出现后缩略图收起", ThumbnailManager.shared.visibleCount == 0)
             check("钉上以后自动选中（显示杏色边框，按 Esc 就能关）", pin.isKeyWindow && (pin.contentView as? PinView)?.isSelected == true)
-            check("钉图窗口比图大一圈（看不见的抓取边）", pin.frame == pin.contentFrame.insetBy(dx: -PinWindow.gripMargin, dy: -PinWindow.gripMargin))
             try? await Task.sleep(for: .milliseconds(300))
             await captureComposite(around: pin.frame, to: dir.appendingPathComponent("7-钉图实际显示.png"))
             pin.makeKey()
             check("单击选中钉图（显示杏色边框）", (pin.contentView as? PinView)?.isSelected == true)
             if let view = pin.contentView as? PinView {
                 // 拖边缘、角调整大小（200×150 的钉图）
-                // 视图坐标：图在 (m, m) 起，200×150
-                let m = PinWindow.gripMargin
-                func at(_ x: CGFloat, _ y: CGFloat) -> RegionSelector.Handle? { view.handle(at: CGPoint(x: m + x, y: m + y)) }
-                check("钉图边缘：四个角、四条边认得出，中间是移动", at(2, 148) == .topLeft && at(198, 2) == .bottomRight
-                      && at(198, 75) == .right && at(100, 148) == .top && at(100, 75) == nil)
-                check("图外面那一圈也能抓住边缘（不会抓到下面的窗口）", at(-4, 75) == .left && at(204, 75) == .right
-                      && at(100, 154) == .top && at(-4, -4) == .bottomLeft)
-                let start = pin.contentFrame
+                check("钉图边缘：四个角、四条边认得出，中间是移动", view.handle(at: CGPoint(x: 2, y: 148)) == .topLeft
+                      && view.handle(at: CGPoint(x: 198, y: 2)) == .bottomRight && view.handle(at: CGPoint(x: 198, y: 75)) == .right
+                      && view.handle(at: CGPoint(x: 100, y: 148)) == .top && view.handle(at: CGPoint(x: 100, y: 75)) == nil)
+                let start = pin.frame
                 view.debugResize(.bottomRight, by: CGSize(width: 40, height: -30))
-                check("拖右下角放大：保持长宽比，左上角不动", pin.contentFrame.width == 240 && pin.contentFrame.height == 180
-                      && pin.contentFrame.minX == start.minX && pin.contentFrame.maxY == start.maxY, "\(pin.contentFrame)")
-                let before = pin.contentFrame
+                check("拖右下角放大：保持长宽比，左上角不动", pin.frame.width == 240 && pin.frame.height == 180
+                      && pin.frame.minX == start.minX && pin.frame.maxY == start.maxY, "\(pin.frame)")
+                let before = pin.frame
                 view.debugResize(.left, by: CGSize(width: 60, height: 0))
-                check("拖左边缩小：保持长宽比，右边不动、上下居中", pin.contentFrame.width == 180 && pin.contentFrame.height == 135
-                      && pin.contentFrame.maxX == before.maxX && abs(pin.contentFrame.midY - before.midY) <= 0.5, "\(pin.contentFrame)")
+                check("拖左边缩小：保持长宽比，右边不动、上下居中", pin.frame.width == 180 && pin.frame.height == 135
+                      && pin.frame.maxX == before.maxX && abs(pin.frame.midY - before.midY) <= 0.5, "\(pin.frame)")
                 view.debugResize(.right, by: CGSize(width: -1000, height: 0))
-                check("钉图拖到最小也不会消失（至少 40 点）", min(pin.contentFrame.width, pin.contentFrame.height) >= 39.5, "\(pin.contentFrame)")
+                check("钉图拖到最小也不会消失（至少 40 点）", min(pin.frame.width, pin.frame.height) >= 39.5, "\(pin.frame)")
             }
             pin.keyDown(with: key(kVK_Escape))
             check("选中后按 Esc 关闭钉图", PinManager.shared.count == 0 && !pin.isVisible)
@@ -1201,8 +1196,8 @@ enum DebugUITest {
                let view = pin.contentView as? PinView {
                 try? await Task.sleep(for: .milliseconds(200))
                 let visibleFrame = pin.screen?.visibleFrame ?? screen.visibleFrame
-                check("长截图钉图：原宽度、高度不超出屏幕", view.debugIsLong && pin.contentFrame.width == 300
-                      && pin.contentFrame.height <= visibleFrame.height * 0.85 + 1 && visibleFrame.contains(pin.contentFrame), "\(pin.contentFrame)")
+                check("长截图钉图：原宽度、高度不超出屏幕", view.debugIsLong && pin.frame.width == 300
+                      && pin.frame.height <= visibleFrame.height * 0.85 + 1 && visibleFrame.contains(pin.frame), "\(pin.frame)")
                 func wheel(_ amount: Int32, option: Bool) -> NSEvent? {
                     let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0)
                     cg?.flags = option ? .maskAlternate : []
@@ -1211,14 +1206,14 @@ enum DebugUITest {
                 if let down = wheel(-120, option: false) { view.scrollWheel(with: down) }
                 check("长截图钉图：滚轮在窗口里往下翻", view.debugScrollOffset > 0 && view.debugZoom == 1, "\(view.debugScrollOffset)")
                 if let zoomOut = wheel(-40, option: true) { view.scrollWheel(with: zoomOut) }
-                check("长截图钉图：⌥ + 滚轮缩放", view.debugZoom < 1 && pin.contentFrame.width < 300, "\(view.debugZoom)")
+                check("长截图钉图：⌥ + 滚轮缩放", view.debugZoom < 1 && pin.frame.width < 300, "\(view.debugZoom)")
                 // 拖下边：只改露出多少，不缩放；上边不动
-                let zoomBefore = view.debugZoom, frameBefore = pin.contentFrame
+                let zoomBefore = view.debugZoom, frameBefore = pin.frame
                 view.debugResize(.bottom, by: CGSize(width: 0, height: 80))
                 check("长截图钉图：拖下边只改露出的长度，不缩放、上边不动", view.debugZoom == zoomBefore
-                      && pin.contentFrame.height == frameBefore.height - 80 && pin.contentFrame.maxY == frameBefore.maxY, "\(pin.contentFrame)")
+                      && pin.frame.height == frameBefore.height - 80 && pin.frame.maxY == frameBefore.maxY, "\(pin.frame)")
                 view.debugResize(.right, by: CGSize(width: 30, height: 0))
-                check("长截图钉图：拖右边是缩放", view.debugZoom > zoomBefore && pin.contentFrame.minX == frameBefore.minX, "\(view.debugZoom)")
+                check("长截图钉图：拖右边是缩放", view.debugZoom > zoomBefore && pin.frame.minX == frameBefore.minX, "\(view.debugZoom)")
                 pin.close()
             }
         }
