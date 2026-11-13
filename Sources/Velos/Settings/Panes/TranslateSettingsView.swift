@@ -105,17 +105,34 @@ final class EngineSettingsModel: ObservableObject {
         objectWillChange.send()
     }
 
-    /// 输入框绑定：读的时候从钥匙串取，改的时候写回钥匙串
+    /// 输入框绑定。改的时候写回（Key、ID 写钥匙串，配置写设置）。
+    /// 读的时候：配置照常显示；钥匙串里的 Key、ID 不读出来显示——读钥匙串内容要弹密码框（每次更新签名都不同），
+    /// 已经保存的在输入框里提示「已保存」，要换就直接输入新的
     func binding(_ engine: EngineID, _ field: String) -> Binding<String> {
         let key = "\(engine.rawValue).\(field)"
         return Binding(
-            get: { [weak self] in self?.values[key] ?? engine.credential(field) },
+            get: { [weak self] in
+                self?.values[key] ?? (EngineOptions.isOption(field) ? engine.credential(field) : "")
+            },
             set: { [weak self] value in
                 self?.values[key] = value
                 engine.setCredential(value, for: field)
                 self?.testResults[engine] = nil
             }
         )
+    }
+
+    /// 钥匙串里已经保存了、输入框里又没有新输入的字段：显示「已保存」提示和「清除」按钮
+    func isSavedInKeychain(_ engine: EngineID, _ field: String) -> Bool {
+        _ = values
+        return !EngineOptions.isOption(field) && (values["\(engine.rawValue).\(field)"] ?? "").isEmpty && engine.isFilled(field)
+    }
+
+    /// 清除钥匙串里保存的这个字段
+    func clear(_ engine: EngineID, _ field: String) {
+        values["\(engine.rawValue).\(field)"] = ""
+        engine.setCredential("", for: field)
+        testResults[engine] = nil
     }
 
     /// 测试：把「Hello, world.」翻译成简体中文
@@ -197,15 +214,21 @@ private struct EngineDetail: View {
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.warmSecondary)
                         .frame(width: 110, alignment: .trailing)
+                    let saved = model.isSavedInKeychain(engine, field.key)
+                    let placeholder = saved ? "已保存 · 输入新的值替换" : field.placeholder
                     Group {
                         if field.secret {
-                            SecureField(field.placeholder, text: model.binding(engine, field.key))
+                            SecureField(placeholder, text: model.binding(engine, field.key))
                         } else {
-                            TextField(field.placeholder, text: model.binding(engine, field.key))
+                            TextField(placeholder, text: model.binding(engine, field.key))
                         }
                     }
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12))
+                    if saved {
+                        Button("清除") { model.clear(engine, field.key) }
+                            .buttonStyle(WarmButtonStyle(prominent: false))
+                    }
                 }
             }
             HStack(spacing: 8) {

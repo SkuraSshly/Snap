@@ -162,6 +162,22 @@ enum DebugMemoryShot {
                 note("结束（进程保留）")
                 return
             }
+            // VELOS_MEMORY_SETTINGS=轮数：只反复打开、关闭设置窗口（逐页），看内存会不会随次数一直涨
+            if let rounds = Int(ProcessInfo.processInfo.environment["VELOS_MEMORY_SETTINGS"] ?? ""), rounds > 0 {
+                // VELOS_MEMORY_SETTINGS_TAB=栏目：只打开这一页（分别看每一页的内存）
+                let only = ProcessInfo.processInfo.environment["VELOS_MEMORY_SETTINGS_TAB"].flatMap(SettingsTab.init(rawValue:))
+                for round in 1...rounds {
+                    for tab in only.map({ [$0] }) ?? SettingsTab.allCases {
+                        SettingsWindowController.show(tab)
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                    SettingsWindowController.currentWindow?.close()
+                    try? await Task.sleep(for: .seconds(8))
+                    note("第 \(round) 轮：设置窗口逐页打开、关闭 8 秒后")
+                }
+                note("结束（进程保留）")
+                return
+            }
             let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
                                          characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
             for round in 1...3 {

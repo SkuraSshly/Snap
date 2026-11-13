@@ -89,7 +89,8 @@ enum EngineCrypto {
     }
 }
 
-/// 引擎的 Key 存在钥匙串里（不写进设置文件）。条目：服务 local.velos.Velos.engines，账户「引擎.字段」
+/// 引擎的 Key、ID 存在钥匙串里（不写进设置文件）。条目：服务 local.velos.Velos.engines，账户「引擎.字段」。
+/// 地址、模型名、地域这些不是机密的配置存在普通设置里，见 EngineOptions
 ///
 /// 少弹密码框：Velos 没有开发者证书，每次更新签名都不同，钥匙串把新版本当成另一个 App——
 /// 读 Key 的内容要弹密码框问一次（点「始终允许」后，直到下次更新都不再问）。所以：
@@ -106,18 +107,19 @@ enum EngineKeychain {
     /// 这次运行里读过、写过的内容（"" 表示没有这个条目）
     private static let cache = Mutex<[String: String]>([:])
 
-    static func get(_ account: String) -> String {
+    static func get(_ account: String) -> String { read(account) ?? "" }
+
+    /// 读内容；没有这个条目返回 ""，读不出来（用户在密码框点了「拒绝」等）返回 nil
+    static func read(_ account: String) -> String? {
         if let cached = cache.withLock({ $0[account] }) { return cached }
         var query = baseQuery(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess || status == errSecItemNotFound else { return nil }   // 失败不记住：下次用到时再问
         let value = (result as? Data).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        // 用户在密码框点了「拒绝」之类的失败不记住：下次用到时再问
-        if status == errSecSuccess || status == errSecItemNotFound {
-            cache.withLock { $0[account] = value }
-        }
+        cache.withLock { $0[account] = value }
         return value
     }
 
@@ -157,5 +159,35 @@ enum EngineKeychain {
 
     private static func baseQuery(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+}
+
+/// 引擎里不是机密的配置（Base URL、模型名、地域）：存在普通设置里（UserDefaults，可以在任何线程读写），读的时候不用密码。
+/// 2.2 及以前存在钥匙串里：第一次用到时读出来搬到设置里（这一次要允许读钥匙串），并删掉钥匙串里的那一条，之后不再碰钥匙串
+enum EngineOptions {
+    /// 哪些字段算普通配置
+    static func isOption(_ field: String) -> Bool { ["baseURL", "model", "region"].contains(field) }
+
+    private static func key(_ account: String) -> String { "engineOption.\(account)" }
+
+    static func get(_ account: String) -> String {
+        if let value = UserDefaults.standard.string(forKey: key(account)) { return value }
+        guard EngineKeychain.exists(account), let value = EngineKeychain.read(account) else { return "" }
+        UserDefaults.standard.set(value, forKey: key(account))
+        EngineKeychain.set("", for: account)
+        return value
+    }
+
+    /// 有没有填：设置里有，或者还在钥匙串里没搬过来（只查在不在，不弹密码框）
+    static func exists(_ account: String) -> Bool {
+        if let value = UserDefaults.standard.string(forKey: key(account)) { return !value.isEmpty }
+        return EngineKeychain.exists(account)
+    }
+
+    /// 写入；空字符串表示删除（钥匙串里没搬过来的旧条目一起删）
+    static func set(_ value: String, for account: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(trimmed, forKey: key(account))
+        if EngineKeychain.exists(account) { EngineKeychain.set("", for: account) }
     }
 }

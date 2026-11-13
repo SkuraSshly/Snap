@@ -25,7 +25,7 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
     /// 大语言模型翻译（流式输出、可自定义提示词）
     var isLLM: Bool { self == .openAI || self == .claude }
 
-    /// 需要填写的字段（存在钥匙串里）
+    /// 需要填写的字段（Key、ID 存在钥匙串里；地址、模型名、地域存在普通设置里，见 EngineOptions）
     struct Field: Sendable {
         let key: String
         let label: String
@@ -75,13 +75,28 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
     @MainActor static var debugOnline: ((EngineID, String) async throws -> String)?
     #endif
 
-    func credential(_ key: String) -> String { EngineKeychain.get("\(rawValue).\(key)") }
-    func setCredential(_ value: String, for key: String) { EngineKeychain.set(value, for: "\(rawValue).\(key)") }
+    /// 读一个字段（Key、ID 读钥匙串内容，可能要允许一次；配置读普通设置）
+    func credential(_ key: String) -> String {
+        EngineOptions.isOption(key) ? EngineOptions.get("\(rawValue).\(key)") : EngineKeychain.get("\(rawValue).\(key)")
+    }
 
-    /// 必填字段都填了（区域、地域、Claude 的模型可以不填）。只查钥匙串条目在不在，不读 Key 的内容（不弹密码框）
+    func setCredential(_ value: String, for key: String) {
+        if EngineOptions.isOption(key) {
+            EngineOptions.set(value, for: "\(rawValue).\(key)")
+        } else {
+            EngineKeychain.set(value, for: "\(rawValue).\(key)")
+        }
+    }
+
+    /// 这个字段填了没有：只查在不在，不读内容（不弹密码框）
+    func isFilled(_ key: String) -> Bool {
+        EngineOptions.isOption(key) ? EngineOptions.exists("\(rawValue).\(key)") : EngineKeychain.exists("\(rawValue).\(key)")
+    }
+
+    /// 必填字段都填了（区域、地域、Claude 的模型可以不填）
     var hasCredentials: Bool {
         fields.filter { !($0.key == "region" || (self == .claude && $0.key == "model")) }
-            .allSatisfy { EngineKeychain.exists("\(rawValue).\($0.key)") }
+            .allSatisfy { isFilled($0.key) }
     }
 
     /// 在线翻译；source 为 nil 时让服务自动检测。大模型引擎一边生成一边通过 onPartial 回报（其他引擎一次返回）
