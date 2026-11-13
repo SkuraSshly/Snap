@@ -181,7 +181,7 @@ struct TranslationView: View {
                 }
             }
             Divider()
-            Button("设置翻译引擎…") { SettingsWindowController.show(.translate) }
+            Button("设置翻译引擎…") { SettingsLauncher.open(.translate) }
         } label: {
             HStack(spacing: 3) {
                 Text(model.engine == .apple ? "Apple 翻译 · 离线" : model.engine.displayName)

@@ -45,14 +45,45 @@ mkdir -p "$SERVICE/Contents/MacOS"
 cp "$BIN_DIR/VelosOCRService" "$SERVICE/Contents/MacOS/VelosOCR"
 cp "$SERVICE_PLIST" "$SERVICE/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+# 设置窗口（VelosSettings：打开设置时由 Velos 作为子进程启动，关掉窗口 30 秒后自己退出，释放界面框架占的内存）。
+# 和 Velos 是同一份程序，用自己的名字和标识打包：活动监视器里显示 VelosSettings，和 VelosOCR 一样
+SETTINGS_APP="$APP/Contents/Helpers/VelosSettings.app"
+SETTINGS_ID="$BUNDLE_ID.settings"
+mkdir -p "$SETTINGS_APP/Contents/MacOS" "$SETTINGS_APP/Contents/Resources"
+cp "$BIN_DIR/$APP_NAME" "$SETTINGS_APP/Contents/MacOS/VelosSettings"
+cp "$APP/Contents/Info.plist" "$SETTINGS_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $SETTINGS_ID" \
+  -c "Set :CFBundleExecutable VelosSettings" \
+  -c "Set :CFBundleName VelosSettings" \
+  -c "Set :CFBundleDisplayName VelosSettings" "$SETTINGS_APP/Contents/Info.plist"
+# VelosSettings 只带小图标（活动监视器里显示 16–32 像素就够，省下 1.7 MB）；
+# 大图标（权限引导里的）启动时从 Velos.app 读，见 SettingsProcessController
+ICON_TMP="$(mktemp -d)"
+iconutil -c iconset Resources/AppIcon.icns -o "$ICON_TMP/AppIcon.iconset"
+find "$ICON_TMP/AppIcon.iconset" -type f ! -name 'icon_16x16*' ! -name 'icon_32x32*' -delete
+iconutil -c icns "$ICON_TMP/AppIcon.iconset" -o "$SETTINGS_APP/Contents/Resources/AppIcon.icns"
+rm -rf "$ICON_TMP"
+printf 'APPL????' > "$SETTINGS_APP/Contents/PkgInfo"
+
+if [[ "$CONFIG" == "release" ]]; then
+  # 正式版去掉调试符号（只在开发时读崩溃日志有用）：程序文件小一半，Velos 和 VelosSettings 各一份都变小
+  strip -x "$APP/Contents/MacOS/$APP_NAME" "$SETTINGS_APP/Contents/MacOS/VelosSettings" "$SERVICE/Contents/MacOS/VelosOCR"
+fi
+
+# VelosSettings 那份程序换一个自己的 UUID：和 Velos 一模一样的话，系统日志会把两个进程的名字弄混
+swift scripts/set-uuid.swift "$SETTINGS_APP/Contents/MacOS/VelosSettings" VelosSettings >/dev/null
 
 echo "▸ 签名（${SIGN_IDENTITY}）"
-# 先签里面的服务，再签整个 App
+# 先签里面的服务和设置窗口，再签整个 App
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   codesign --force --sign - \
     --identifier "$SERVICE_ID" \
     --requirements "=designated => identifier \"$SERVICE_ID\"" \
     "$SERVICE"
+  codesign --force --sign - \
+    --identifier "$SETTINGS_ID" \
+    --requirements "=designated => identifier \"$SETTINGS_ID\"" \
+    "$SETTINGS_APP"
   # ad-hoc 签名默认的「指定要求」(designated requirement) 是二进制的 cdhash，
   # 每次重新编译都会变化，系统会把新版本当成另一个 App，屏幕录制权限随之失效。
   # 这里把指定要求显式设为 bundle id，重新编译后已授予的权限依然有效（仅适合本机自用）。
@@ -62,6 +93,7 @@ if [[ "$SIGN_IDENTITY" == "-" ]]; then
     "$APP"
 else
   codesign --force --sign "$SIGN_IDENTITY" --identifier "$SERVICE_ID" "$SERVICE"
+  codesign --force --sign "$SIGN_IDENTITY" --identifier "$SETTINGS_ID" "$SETTINGS_APP"
   codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP"
 fi
 

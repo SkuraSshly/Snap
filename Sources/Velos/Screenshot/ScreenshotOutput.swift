@@ -203,7 +203,7 @@ enum ScreenshotOutput {
         alert.addButton(withTitle: "打开设置")
         NSApp.activate()
         if alert.runModal() == .alertSecondButtonReturn {
-            SettingsWindowController.show(.general)
+            SettingsLauncher.open(.general)
         }
     }
 }

@@ -6,6 +6,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.makeMainMenu()
+        // 设置进程（见 SettingsProcess）：只显示设置窗口，不注册快捷键、不显示菜单栏图标，什么别的都不做
+        if SettingsProcess.isSettingsProcess {
+            PermissionManager.shared.refresh()
+            SettingsProcessController.shared.start()
+            return
+        }
         statusBar = StatusBarController()
         PermissionManager.shared.refresh()
         CaptureCoordinator.shared.start()
@@ -16,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 只有第一次运行才弹出权限引导；之后的每次启动（包括开机自启）都不弹出任何窗口
         if !Preferences.shared.hasCompletedOnboarding {
-            OnboardingWindowController.show()
+            SettingsLauncher.openOnboarding()
         }
 
         #if DEBUG
@@ -28,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugPermissionRequest.runIfRequested()
         DebugRecordingTest.runIfRequested()
         DebugFeatureTest.runIfRequested()
+        DebugSplitTest.runIfRequested()
         DebugShowcase.runIfRequested()
         DebugShowcase.runSettingsShotsIfRequested()
         #endif
@@ -36,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Velos 已在运行时再次打开它（访达双击、启动台、Spotlight、`open` 命令）会走到这里。
     /// 菜单栏图标被隐藏后，这是除快捷键之外找回设置的唯一入口，所以直接打开设置窗口。
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        SettingsWindowController.show()
+        SettingsLauncher.open()
         return false
     }
 }

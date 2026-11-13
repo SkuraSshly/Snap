@@ -34,6 +34,8 @@ final class RecordingManager: ObservableObject {
     private var screen: NSScreen?
     /// 录制期间监听的系统事件（熄屏、锁屏、切换用户、睡眠），停止录制时移除
     private var systemObservers: [(NotificationCenter, NSObjectProtocol)] = []
+    /// 锁屏是全系统的分布式通知：要「立即送达」（Velos 平时不是前台 App，否则系统会把它攒到 Velos 变成前台才送）
+    private var lockObserver: DistributedObserver?
 
     /// 录制中（包括暂停）
     var isRecording: Bool { state == .recording || state == .paused }
@@ -248,8 +250,8 @@ final class RecordingManager: ObservableObject {
         let workspace = NSWorkspace.shared.notificationCenter
         observe(workspace, NSWorkspace.screensDidSleepNotification) { $0.autoPause(because: "屏幕熄灭") }
         observe(workspace, NSWorkspace.sessionDidResignActiveNotification) { $0.autoPause(because: "切换到了别的用户") }
-        observe(DistributedNotificationCenter.default(), Self.screenLockedNotification) {
-            $0.autoPause(because: "锁屏")
+        lockObserver = DistributedObserver(Self.screenLockedNotification) { [weak self] _ in
+            self?.autoPause(because: "锁屏")
         }
         observe(workspace, NSWorkspace.willSleepNotification) { manager in
             guard manager.isRecording else { return }
@@ -278,6 +280,8 @@ final class RecordingManager: ObservableObject {
     private func stopWatchingSystemEvents() {
         for (center, token) in systemObservers { center.removeObserver(token) }
         systemObservers.removeAll()
+        lockObserver?.invalidate()
+        lockObserver = nil
     }
 
     /// 自动暂停：只在正在录时暂停（用户自己已经暂停的不动）；记下原因显示在控制条上
@@ -355,7 +359,7 @@ final class RecordingManager: ObservableObject {
     private func showError(_ title: String, _ error: Error) {
         PermissionManager.shared.refresh()
         if !PermissionManager.shared.screenRecordingGranted {
-            OnboardingWindowController.show()
+            SettingsLauncher.openOnboarding()
             return
         }
         let alert = NSAlert()

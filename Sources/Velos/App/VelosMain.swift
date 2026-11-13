@@ -7,7 +7,7 @@ import AppKit
 enum VelosMain {
     @MainActor
     static func main() {
-        LegacyMigration.run()   // 从旧版 Snap 搬设置：要在读任何设置之前
+        if !AppIdentity.isSettingsApp { LegacyMigration.run() }   // 从旧版 Snap 搬设置：要在读任何设置之前
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

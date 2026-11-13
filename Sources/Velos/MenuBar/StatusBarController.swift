@@ -176,10 +176,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func showPermissions() {
-        OnboardingWindowController.show()
+        SettingsLauncher.openOnboarding()
     }
 
     @objc private func openSettings() {
-        SettingsWindowController.show()
+        SettingsLauncher.open()
     }
 }

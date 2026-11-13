@@ -62,6 +62,7 @@ enum VideoQuality: String, CaseIterable, Identifiable {
 // MARK: - 设置
 
 /// 所有用户设置，持久化在 UserDefaults（~/Library/Preferences/local.velos.Velos.plist）。
+/// VelosSettings 读写的也是这一份（见 AppIdentity.defaults）。
 /// SwiftUI 设置界面直接绑定这些属性；其他模块读取它们，或通过 `$属性` 订阅变化。
 @MainActor
 final class Preferences: ObservableObject {
@@ -201,26 +202,49 @@ final class Preferences: ObservableObject {
         recordingHotkey = Hotkey(stored: Self.load(.recordingHotkey, [Int]())) ?? .defaultRecording
         translateHotkey = Hotkey(stored: Self.load(.translateHotkey, [Int]())) ?? .defaultTranslate
         // 默认快捷键从 ⌥1 / ⌥2 / ⌥3 改成 ⌥A / ⌥S / ⌥D：还在用旧默认值的一次性换成新的（只做一次，之后自己改回 ⌥1 也会保留）
-        if !UserDefaults.standard.bool(forKey: "hotkeysMigratedToASD") {
+        if !AppIdentity.defaults.bool(forKey: "hotkeysMigratedToASD") {
             if screenshotHotkey == Hotkey.legacyDefaults[0] { screenshotHotkey = .defaultScreenshot }
             if recordingHotkey == Hotkey.legacyDefaults[1] { recordingHotkey = .defaultRecording }
             if translateHotkey == Hotkey.legacyDefaults[2] { translateHotkey = .defaultTranslate }
-            UserDefaults.standard.set(true, forKey: "hotkeysMigratedToASD")
+            AppIdentity.defaults.set(true, forKey: "hotkeysMigratedToASD")
         }
+    }
+
+    // MARK: 设置进程改了设置之后
+
+    /// 重新从设置文件读一遍（设置窗口在单独的进程里改了设置，见 SettingsProcess）。
+    /// 只更新变了的项：订阅了某项的地方（菜单栏图标、快捷键……）只在它真的变了时才收到通知
+    func reloadFromStore() {
+        let stored = Preferences()
+        func sync<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<Preferences, T>) {
+            if self[keyPath: keyPath] != stored[keyPath: keyPath] { self[keyPath: keyPath] = stored[keyPath: keyPath] }
+        }
+        sync(\.showMenuBarIcon); sync(\.screenshotDirectoryPath); sync(\.recordingDirectoryPath)
+        sync(\.imageFormat); sync(\.jpegQuality); sync(\.screenshotIncludesCursor); sync(\.screenshotSaveAs1x)
+        sync(\.screenshotCornerRadius); sync(\.screenshotCopyToClipboard); sync(\.screenshotSaveToFile)
+        sync(\.screenshotShowThumbnail); sync(\.hideThumbnailAfterPaste)
+        sync(\.recordingResolution); sync(\.recordingFrameRate); sync(\.videoCodec); sync(\.videoQuality)
+        sync(\.recordSystemAudio); sync(\.recordMicrophone); sync(\.microphoneDeviceID); sync(\.recordingShowsCursor)
+        sync(\.recordingCountdown); sync(\.highlightClicks); sync(\.recordingShowThumbnail); sync(\.gifFrameRate); sync(\.gifMaxWidth)
+        sync(\.ocrSmartLayout); sync(\.ocrDetectsQRCodes); sync(\.enabledEngines); sync(\.defaultEngine); sync(\.llmPrompt)
+        sync(\.translateWindowPinnedByDefault); sync(\.ocrPreferredLanguage); sync(\.defaultTargetLanguage)
+        sync(\.translateAutoCopy); sync(\.speechRate)
+        sync(\.screenshotHotkey); sync(\.recordingHotkey); sync(\.translateHotkey)
     }
 
     // MARK: 读写辅助
 
     private static func load<T>(_ key: Key, _ defaultValue: T) -> T {
-        UserDefaults.standard.object(forKey: key.rawValue) as? T ?? defaultValue
+        AppIdentity.defaults.object(forKey: key.rawValue) as? T ?? defaultValue
     }
 
     private static func loadEnum<E: RawRepresentable>(_ key: Key, _ defaultValue: E) -> E {
-        guard let raw = UserDefaults.standard.object(forKey: key.rawValue) as? E.RawValue else { return defaultValue }
+        guard let raw = AppIdentity.defaults.object(forKey: key.rawValue) as? E.RawValue else { return defaultValue }
         return E(rawValue: raw) ?? defaultValue
     }
 
     private static func save(_ value: Any, _ key: Key) {
-        UserDefaults.standard.set(value, forKey: key.rawValue)
+        AppIdentity.defaults.set(value, forKey: key.rawValue)
+        SettingsProcess.notePreferencesChanged()   // 在设置进程里改的：告诉 Velos
     }
 }

@@ -1,7 +1,10 @@
 import ServiceManagement
 
 /// 开机自启：使用 SMAppService（macOS 13+），不需要额外的辅助 App。
-/// 状态以系统为准（系统设置 › 通用 › 登录项），不在 UserDefaults 里另存一份，避免两边不一致。
+/// 状态以系统为准（系统设置 › 通用 › 登录项）。
+///
+/// 设置窗口在 VelosSettings 里：系统的登录项只能由 App 自己登记（VelosSettings 登记的会是它自己），
+/// 所以开关交给 Velos 去做；Velos 把系统的状态抄一份到设置文件里，VelosSettings 从那里读来显示。
 @MainActor
 final class LaunchAtLogin: ObservableObject {
     static let shared = LaunchAtLogin()
@@ -16,13 +19,31 @@ final class LaunchAtLogin: ObservableObject {
     }
 
     func refresh() {
+        if AppIdentity.isSettingsApp {
+            let defaults = AppIdentity.defaults
+            isEnabled = defaults.string(forKey: Self.statusKey) == "enabled"
+            requiresApproval = defaults.string(forKey: Self.statusKey) == "requiresApproval"
+            lastError = defaults.string(forKey: Self.errorKey)
+            return
+        }
         let status = SMAppService.mainApp.status
         isEnabled = status == .enabled
         requiresApproval = status == .requiresApproval
+        // 给 VelosSettings 看的：系统状态抄一份到设置文件
+        AppIdentity.defaults.set(isEnabled ? "enabled" : requiresApproval ? "requiresApproval" : "off", forKey: Self.statusKey)
+        if let lastError { AppIdentity.defaults.set(lastError, forKey: Self.errorKey) } else { AppIdentity.defaults.removeObject(forKey: Self.errorKey) }
     }
+
+    private static let statusKey = "launchAtLoginStatus", errorKey = "launchAtLoginError"
 
     /// 注册失败时开关会弹回真实状态，并记录原因供界面显示
     func setEnabled(_ enabled: Bool) {
+        if AppIdentity.isSettingsApp {
+            // 请 Velos 去登记；它做完后发来「设置改了」，这里再 refresh 显示结果
+            SettingsProcess.post(.setLaunchAtLogin, userInfo: ["enabled": enabled ? "1" : "0"])
+            return
+        }
+        defer { SettingsProcess.notePreferencesChanged() }   // 结果告诉开着的设置窗口
         do {
             if enabled {
                 try SMAppService.mainApp.register()

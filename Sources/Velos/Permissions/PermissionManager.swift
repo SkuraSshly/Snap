@@ -37,7 +37,7 @@ final class PermissionManager: ObservableObject {
     func ensureScreenRecording() -> Bool {
         refresh()
         if screenRecordingGranted { return true }
-        OnboardingWindowController.show()
+        SettingsLauncher.openOnboarding()
         return false
     }
 
@@ -45,8 +45,8 @@ final class PermissionManager: ObservableObject {
 
     func requestScreenRecording() {
         didRequestScreenRecording = true
-        let promptedBefore = UserDefaults.standard.bool(forKey: Self.promptedKey)
-        UserDefaults.standard.set(true, forKey: Self.promptedKey)
+        let promptedBefore = AppIdentity.defaults.bool(forKey: Self.promptedKey)
+        AppIdentity.defaults.set(true, forKey: Self.promptedKey)
 
         // 第一次调用会弹出系统授权对话框（同时把 Velos 加进系统设置的列表）。
         // 系统对话框只会出现一次，之后再调用不会有任何提示，只能请用户去系统设置里手动打开。
@@ -86,12 +86,17 @@ final class PermissionManager: ObservableObject {
         }
     }
 
-    /// 重新启动 Velos：先由一个短命的 shell 进程等待本进程退出，再用 open 重新打开
+    /// 重新启动 Velos：先由一个短命的 shell 进程等待本进程退出，再用 open 重新打开。
+    /// 在设置进程里点的：请 Velos 自己重新启动（设置进程会跟着 Velos 退出）
     func relaunch() {
+        if SettingsProcess.isSettingsProcess {
+            SettingsProcess.post(.relaunch)
+            return
+        }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        // 路径作为 $0 传入，避免路径里的空格等字符出问题
-        task.arguments = ["-c", "sleep 0.5; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+        // 路径作为 $0 传入，避免路径里的空格等字符出问题；-n：设置进程可能还开着，要开一份新的 Velos，而不是把它叫到前台
+        task.arguments = ["-c", "sleep 0.5; /usr/bin/open -n \"$0\"", Bundle.main.bundlePath]
         do {
             try task.run()
             NSApp.terminate(nil)

@@ -39,20 +39,40 @@ final class CaptureCoordinator {
     }
 
     /// 更换快捷键：先检查冲突，通过后注册并保存。返回问题描述，nil 表示设置成功。
+    /// 在设置进程里：只检查、保存，由 Velos 收到「设置改了」后重新注册（快捷键只注册在 Velos 那边）
     func setHotkey(_ hotkey: Hotkey, for action: HotkeyManager.Action) -> String? {
         if let problem = hotkeyProblem(hotkey, for: action) { return problem }
+        if SettingsProcess.isSettingsProcess {
+            save(hotkey, for: action)
+            return nil
+        }
         let old = self.hotkey(for: action)
         guard HotkeyManager.shared.bind(action, to: hotkey) else {
             HotkeyManager.shared.bind(action, to: old)
             return "\(hotkey.displayString) 已被其他程序占用。"
         }
+        save(hotkey, for: action)
+        return nil
+    }
+
+    private func save(_ hotkey: Hotkey, for action: HotkeyManager.Action) {
         switch action {
         case .screenshot: Preferences.shared.screenshotHotkey = hotkey
         case .recording: Preferences.shared.recordingHotkey = hotkey
         case .translate: Preferences.shared.translateHotkey = hotkey
         }
         Log.hotkey.notice("\(action.title, privacy: .public)快捷键改为 \(hotkey.displayString, privacy: .public)")
-        return nil
+    }
+
+    /// 设置进程改了快捷键：按设置里的重新注册（没变的不动）
+    func rebindHotkeysFromPreferences() {
+        for action in [HotkeyManager.Action.screenshot, .recording, .translate] {
+            let wanted = hotkey(for: action)
+            guard HotkeyManager.shared.hotkey(for: action) != wanted else { continue }
+            if !HotkeyManager.shared.bind(action, to: wanted) {
+                Log.hotkey.error("\(action.title, privacy: .public)快捷键 \(wanted.displayString, privacy: .public) 注册失败")
+            }
+        }
     }
 
     func handleHotkey(_ action: HotkeyManager.Action) {

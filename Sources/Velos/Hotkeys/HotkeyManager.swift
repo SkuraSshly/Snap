@@ -61,13 +61,16 @@ final class HotkeyManager {
         return status == noErr
     }
 
-    /// 暂停 / 恢复全部快捷键（设置界面录制新快捷键期间）
+    /// 暂停 / 恢复全部快捷键（设置界面录制新快捷键期间）。
+    /// 设置窗口在单独的进程里（见 SettingsProcess）：快捷键注册在 Velos 那边，请它暂停 / 恢复
     func pauseAll() {
+        if SettingsProcess.isSettingsProcess { return SettingsProcess.post(.pauseHotkeys) }
         allPaused = true
         for action in Action.allCases { unregister(action) }
     }
 
     func resumeAll() {
+        if SettingsProcess.isSettingsProcess { return SettingsProcess.post(.resumeHotkeys) }
         guard allPaused else { return }
         allPaused = false
         for action in Action.allCases where !suspended.contains(action) { register(action) }
@@ -108,6 +111,7 @@ final class HotkeyManager {
     }
 
     #if DEBUG
+    var debugAllPaused: Bool { allPaused }
     var debugRegisteredCount: Int { registered.count }
     var debugTemporaryCount: Int { temporary.count }
     func debugPressTemporary(_ number: UInt32) { handle(id: number, isPress: true) }

@@ -219,7 +219,7 @@ final class ScreenshotSession: OverlayEventHandler {
         // 权限被收回时 ScreenCaptureKit 会报错：回到权限引导，而不是静默失败
         PermissionManager.shared.refresh()
         if !PermissionManager.shared.screenRecordingGranted {
-            OnboardingWindowController.show()
+            SettingsLauncher.openOnboarding()
             return
         }
         let alert = NSAlert()
