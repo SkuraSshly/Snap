@@ -89,7 +89,8 @@ enum WarmCursor {
     /// outward 时朝外的是杏色、朝里的是浅杏色（往外拖是放大，一眼看出来）；否则两个一样
     static func resize(center c: CGPoint, angle: CGFloat, outward: Bool) -> Shape {
         let p = point(c, angle: angle)
-        let gap: CGFloat = 1.6, length: CGFloat = 6.4, halfWidth: CGFloat = 4.4
+        // 细长的等腰三角：底边 6.6、高 7.2；两个三角之间空 4.4
+        let gap: CGFloat = 2.2, length: CGFloat = 7.2, halfWidth: CGFloat = 3.3
         func triangle(_ sign: CGFloat) -> CGPath {
             let path = CGMutablePath()
             path.addLines(between: [p(sign * (gap + length), 0), p(sign * gap, -halfWidth), p(sign * gap, halfWidth)])
