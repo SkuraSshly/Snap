@@ -57,8 +57,10 @@ final class LongCaptureSession {
         Task {
             do {
                 try await engine.start(region: region, screen: screen)
+                guard !isFinished else { return }   // 启动期间就取消了
                 Log.capture.notice("长截图：开始，选区 \(Int(self.region.width))×\(Int(self.region.height)) 点")
             } catch {
+                guard !isFinished else { return }
                 Log.capture.error("长截图：无法开始 \(error.localizedDescription, privacy: .public)")
                 overlay.message = "无法开始长截图：\(error.localizedDescription)"
             }

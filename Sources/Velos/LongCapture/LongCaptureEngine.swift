@@ -24,7 +24,10 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
     var onError: (@MainActor (String) -> Void)?
 
     private let queue = DispatchQueue(label: "local.velos.longcapture", qos: .userInteractive)
-    private var stream: SCStream?
+    /// 开始、停止都在主线程上调用：正在启动时被停止（点剪刀后马上取消），启动完成后要立刻停掉，
+    /// 否则界面已经关了，截屏却一直在后台跑
+    @MainActor private var stream: SCStream?
+    @MainActor private var isStopped = false
     /// 只在 queue 上读写
     private var stitcher: ScrollStitcher
     /// 预览小图的大小（像素）；每秒最多更新 30 次，跟得上滚动
@@ -52,11 +55,13 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
         super.init()
     }
 
-    /// 开始截取 region（全局坐标，单位：点）
+    /// 开始截取 region（全局坐标，单位：点）。启动期间调用了 stop() 的话，启动完成后马上停掉
+    @MainActor
     func start(region: CGRect, screen: NSScreen) async throws {
         // 要所有 App（不只是屏幕上正在显示窗口的）：选区边框、提示刚弹出来时可能还没登记成「在屏幕上」，
         // 这时 Velos 不在列表里，就排除不掉，提示条会被截进画面
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        guard !isStopped else { return }
         guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw LongCaptureError.displayNotFound
         }
@@ -94,11 +99,23 @@ final class LongCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unch
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        try await stream.startCapture()
-        self.stream = stream
+        self.stream = stream   // 先记下来：启动期间 stop() 也能停到它
+        do {
+            try await stream.startCapture()
+        } catch {
+            if isStopped { return }   // 启动期间被停止，启动失败也无所谓
+            self.stream = nil
+            throw error
+        }
+        if isStopped {
+            // 启动期间被停止了：stop() 那时停的可能是还没启动完的截屏，这里再停一次
+            try? await stream.stopCapture()
+        }
     }
 
+    @MainActor
     func stop() async {
+        isStopped = true
         guard let stream else { return }
         self.stream = nil
         try? await stream.stopCapture()

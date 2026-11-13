@@ -36,6 +36,7 @@ enum DebugFeatureTest {
             if ProcessInfo.processInfo.environment["VELOS_FEATURETEST_ONLY"] != "hotkeys" {
                 testMenuBarIcon(check)
                 await testCountdown(check, dir: dir)
+                await testSystemEvents(check)
                 await testClickHighlightAndGIF(check, dir: dir)
             }
 
@@ -108,7 +109,12 @@ enum DebugFeatureTest {
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         try? await Task.sleep(for: .milliseconds(300))
-        if window.isKeyWindow, let field = Self.firstTextField(in: window.contentView) {
+        // 用一个临时输入框测菜单的 ⌘V / ⌘C 转发（和设置里的输入框走同一条路）：
+        // 不用设置里现成的输入框——翻译页第一个是 Key 输入框，会写进钥匙串，调试版每次签名不同，写钥匙串要弹密码框
+        if window.isKeyWindow, let content = window.contentView {
+            let field = NSTextField(frame: CGRect(x: 20, y: 20, width: 200, height: 24))
+            content.addSubview(field)
+            defer { field.removeFromSuperview() }
             let pasteboard = NSPasteboard.general
             let saved = pasteboard.string(forType: .string)
             func press(_ key: String) -> Bool {
@@ -127,9 +133,7 @@ enum DebugFeatureTest {
             let clip = pasteboard.string(forType: .string)
             check("设置的输入框里 ⌘V 能粘贴、⌘C 能拷贝", pasted && copied && afterPaste == "粘贴测试-123" && clip == "粘贴测试-123",
                   "粘贴后「\(afterPaste)」，剪贴板「\(clip ?? "无")」")
-            field.stringValue = ""
             field.window?.makeFirstResponder(nil)
-            EngineID.tencent.setCredential("", for: "secretId")
             pasteboard.clearContents()
             if let saved { pasteboard.setString(saved, forType: .string) }
         } else {
@@ -150,14 +154,6 @@ enum DebugFeatureTest {
         window.close()
         try? await Task.sleep(for: .milliseconds(500))
         check("关闭设置窗口时权限设置一起关闭", OnboardingWindowController.debugWindow == nil && child?.isVisible != true)
-    }
-
-    /// 视图树里第一个可编辑的文本框
-    private static func firstTextField(in view: NSView?) -> NSTextField? {
-        guard let view else { return nil }
-        if let field = view as? NSTextField, field.isEditable { return field }
-        for sub in view.subviews { if let found = firstTextField(in: sub) { return found } }
-        return nil
     }
 
     private static func hk(_ code: Int, _ modifiers: Int) -> Hotkey {
@@ -399,6 +395,59 @@ enum DebugFeatureTest {
         ThumbnailManager.shared.debugDismissAll()
         if let url = manager.debugLastOutput { try? FileManager.default.removeItem(at: url) }
         prefs.recordingCountdown = false
+    }
+
+    // MARK: - 系统事件：熄屏、锁屏、切换用户时自动暂停，睡眠前自动停止并保存
+
+    /// 模拟系统发出的通知（只在 Velos 自己的进程里发，不会真的熄屏、睡眠）
+    private static func testSystemEvents(_ check: DebugUITest.Checks) async {
+        let manager = RecordingManager.shared
+        let workspace = NSWorkspace.shared.notificationCenter
+        guard let (session, _) = await selectRegion() else { return check("打开录屏选区", false) }
+        _ = session.overlayKeyDown(key(kVK_Return))
+        let start = Date()
+        while manager.state != .recording, Date().timeIntervalSince(start) < 4 {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        guard manager.state == .recording else { return check("系统事件：开始录制", false, "\(manager.state)") }
+        try? await Task.sleep(for: .milliseconds(600))
+
+        workspace.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(200))
+        check("屏幕熄灭：录制自动暂停，控制条说明原因", manager.state == .paused
+              && manager.debugControlBar?.debugNote == "屏幕熄灭时自动暂停了", manager.debugControlBar?.debugNote ?? "没有说明")
+        workspace.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(200))
+        check("屏幕亮起后保持暂停，等用户点继续", manager.state == .paused)
+        manager.debugControlBar?.debugClickPause()
+        try? await Task.sleep(for: .milliseconds(200))
+        check("点继续：接着录，说明消失", manager.state == .recording && manager.debugControlBar?.debugNote == nil)
+
+        manager.togglePause()
+        workspace.post(name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(200))
+        check("用户自己暂停后再锁屏 / 切换用户：保持暂停，不改说明", manager.state == .paused
+              && manager.debugControlBar?.debugNote == nil)
+        manager.togglePause()
+        // 锁屏通知是全系统广播的，自测不真的发（会惊动别的 App），直接走收到通知后的处理
+        manager.debugSimulateScreenLocked()
+        try? await Task.sleep(for: .milliseconds(400))
+        check("锁屏：录制自动暂停", manager.state == .paused && manager.debugControlBar?.debugNote == "锁屏时自动暂停了",
+              manager.debugControlBar?.debugNote ?? "没有说明")
+
+        workspace.post(name: NSWorkspace.willSleepNotification, object: nil)
+        let stopStart = Date()
+        while manager.state != .idle, Date().timeIntervalSince(stopStart) < 5 {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let saved = manager.debugLastOutput.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        check("电脑要睡眠：自动停止并保存录屏", manager.state == .idle && saved, "\(manager.state)")
+        workspace.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        try? await Task.sleep(for: .milliseconds(100))
+        check("录制结束后不再监听熄屏（不会误动作）", manager.state == .idle)
+        try? await Task.sleep(for: .milliseconds(800))
+        ThumbnailManager.shared.debugDismissAll()
+        if let url = manager.debugLastOutput { try? FileManager.default.removeItem(at: url) }
     }
 
     // MARK: - 点击高亮 + GIF

@@ -155,7 +155,8 @@ final class ScreenTranslateController {
                 Log.capture.notice("截屏翻译：识别完成，耗时 \(elapsed.formatted(.units(allowed: [.milliseconds])), privacy: .public)，\(result.text.count) 字，语言 \(result.language?.rawValue ?? "?", privacy: .public)")
                 model.didRecognize(result, elapsed: elapsed)
                 // 等译文出来，只为记一下总耗时（不影响界面）
-                while model.isPending, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(10)) }
+                await model.waitUntilSettled()
+                guard !Task.isCancelled else { return }
                 Log.capture.notice("截屏翻译：从松开鼠标到显示译文共 \((ContinuousClock.now - started).formatted(.units(allowed: [.milliseconds])), privacy: .public)")
             } catch is CancellationError {
             } catch OCRError.noText {

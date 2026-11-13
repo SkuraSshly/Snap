@@ -831,6 +831,7 @@ enum DebugUITest {
         let saved = EngineID.youdao.fields.map { ($0.key, EngineID.youdao.credential($0.key)) }
         EngineID.youdao.setCredential("test-app-key", for: "appKey")
         EngineID.youdao.setCredential("test-secret", for: "appSecret")
+        EngineKeychain.debugForget()
         check("Key 保存在钥匙串里，读得回来", EngineID.youdao.credential("appKey") == "test-app-key" && EngineID.youdao.hasCredentials)
 
         // 默认引擎（有道）失败 → 自动换到下一个（Apple 翻译，自测里是假的），译文区说明
@@ -889,6 +890,7 @@ enum DebugUITest {
         prefs.enabledEngines = savedEnabled
         prefs.defaultEngine = savedDefault
         for (key, value) in saved { EngineID.youdao.setCredential(value, for: key) }
+        EngineKeychain.debugForget()
         check("自测写入的 Key 已从钥匙串删除", EngineID.youdao.credential("appKey") == saved.first { $0.0 == "appKey" }?.1)
     }
 

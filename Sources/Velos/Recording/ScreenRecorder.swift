@@ -60,6 +60,9 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     private let timeline = Timeline()
 
     // 只在 videoQueue 上读写
+    /// 视频文件已经建好、可以写入了。截屏启动成功后才建文件（启动失败就不会在保存文件夹里留下打不开的空视频）；
+    /// 启动和建文件之间那几毫秒到的帧直接丢掉
+    private var isWriting = false
     private var framesWritten = 0
     private var framesDropped = 0
     private var lastFrameTime = CMTime.zero
@@ -162,7 +165,6 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             config.microphoneCaptureDeviceID = id
         }
 
-        guard writer.startWriting() else { throw RecorderError.cannotStartWriting(writer.error) }
         let stream = SCStream(filter: settings.filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
         if settings.capturesSystemAudio {
@@ -172,7 +174,24 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: audioQueue)
         }
         try await stream.startCapture()
+        // 截屏启动成功了，才建视频文件（startWriting 时文件出现在保存文件夹里）。
+        // 在画面队列上做：之后到的帧一定能看到 isWriting，不会在文件还没准备好时写入
+        let started = videoQueue.sync {
+            isWriting = writer.startWriting()
+            return isWriting
+        }
+        guard started else {
+            try? await stream.stopCapture()
+            discardOutput()   // 建到一半失败的残留（通常没有）
+            throw RecorderError.cannotStartWriting(writer.error)
+        }
         self.stream = stream
+    }
+
+    /// 没录成（建文件失败、没录到任何画面）：取消写入，删掉 Velos 自己刚建的、没有内容的视频文件
+    private func discardOutput() {
+        if writer.status == .writing { writer.cancelWriting() }
+        try? FileManager.default.removeItem(at: settings.outputURL)
     }
 
     /// 暂停 / 继续：暂停期间的画面和声音都不写入，成品里没有这一段
@@ -216,8 +235,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             }
         }
         guard let endTime, written > 0 else {
-            writer.cancelWriting()
-            try? FileManager.default.removeItem(at: settings.outputURL)
+            discardOutput()
             throw RecorderError.noFrames
         }
         videoInput.markAsFinished()
@@ -243,7 +261,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
 
     /// 画面（videoQueue）
     private func handleVideo(_ sampleBuffer: CMSampleBuffer) {
-        guard Self.isCompleteFrame(sampleBuffer) else { return }
+        guard isWriting, Self.isCompleteFrame(sampleBuffer) else { return }
         let pts = sampleBuffer.presentationTimeStamp
         if !timeline.hasStarted {
             // 以第一帧的时间作为视频起点；先开始写入会话，再让音频队列知道起点

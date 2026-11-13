@@ -19,6 +19,8 @@ final class RecordingManager: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var isMicrophoneMuted = false
+    /// 系统事件让录制自动暂停时的说明（控制条上显示）；用户点「继续」后清掉
+    private(set) var autoPauseNote: String?
     /// 本次录制是否录了麦克风（控制条据此显示麦克风按钮）
     private(set) var capturesMicrophone = false
     /// 设置里打开了麦克风，但没有麦克风权限，本次没有录麦克风
@@ -30,6 +32,8 @@ final class RecordingManager: ObservableObject {
     private var countdown: RecordingCountdown?
     private var highlighter: ClickHighlighter?
     private var screen: NSScreen?
+    /// 录制期间监听的系统事件（熄屏、锁屏、切换用户、睡眠），停止录制时移除
+    private var systemObservers: [(NotificationCenter, NSObjectProtocol)] = []
 
     /// 录制中（包括暂停）
     var isRecording: Bool { state == .recording || state == .paused }
@@ -118,6 +122,7 @@ final class RecordingManager: ObservableObject {
                 state = .recording
                 highlighter?.start()
                 showControlBar(for: target)
+                watchSystemEvents()
                 // 控制条、红框出来后换成「只排除它们」：录制中用 Velos 截图、截屏翻译时，截图界面、标注、
                 // 翻译结果、缩略图、钉图都会录进视频（录的就是屏幕上看到的）；只有录屏自己的控制条和红框不录
                 await includeVelosWindows(target)
@@ -231,8 +236,62 @@ final class RecordingManager: ObservableObject {
         controlBar = bar
     }
 
+    // MARK: - 系统事件
+
+    /// 录制中遇到这些情况，自动处理：
+    /// - 屏幕熄灭、锁屏、切换到别的用户：自动暂停（画面和声音都不录，这段时间不算进视频）。
+    ///   不然视频里会多出一大段静止画面，人走开了麦克风还在录，锁屏界面也可能被录进去。
+    ///   回来后保持暂停，由用户点「继续」——自动接着录容易录进解锁画面之类不想要的东西
+    /// - 电脑要睡眠：睡眠时截屏一定会被系统切断，趁睡眠前停止并把文件写完，醒来后显示缩略图
+    /// （被录的显示器拔掉、截屏被系统中断：由 recorder.onInterrupted 自动停止并保存）
+    private func watchSystemEvents() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        observe(workspace, NSWorkspace.screensDidSleepNotification) { $0.autoPause(because: "屏幕熄灭") }
+        observe(workspace, NSWorkspace.sessionDidResignActiveNotification) { $0.autoPause(because: "切换到了别的用户") }
+        observe(DistributedNotificationCenter.default(), Self.screenLockedNotification) {
+            $0.autoPause(because: "锁屏")
+        }
+        observe(workspace, NSWorkspace.willSleepNotification) { manager in
+            guard manager.isRecording else { return }
+            Log.capture.notice("电脑要睡眠：自动停止录制并保存")
+            Task { await manager.stop() }
+        }
+    }
+
+    private static let screenLockedNotification = Notification.Name("com.apple.screenIsLocked")
+
+    #if DEBUG
+    /// 自测：模拟收到锁屏通知（真的锁屏通知是全系统广播，自测不发）
+    func debugSimulateScreenLocked() { autoPause(because: "锁屏") }
+    #endif
+
+    private func observe(_ center: NotificationCenter, _ name: Notification.Name, _ action: @escaping (RecordingManager) -> Void) {
+        let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                action(self)
+            }
+        }
+        systemObservers.append((center, token))
+    }
+
+    private func stopWatchingSystemEvents() {
+        for (center, token) in systemObservers { center.removeObserver(token) }
+        systemObservers.removeAll()
+    }
+
+    /// 自动暂停：只在正在录时暂停（用户自己已经暂停的不动）；记下原因显示在控制条上
+    private func autoPause(because reason: String) {
+        guard state == .recording else { return }
+        autoPauseNote = "\(reason)时自动暂停了"   // 先记原因，暂停时控制条一次刷新就显示出来
+        togglePause()
+        Log.capture.notice("\(reason, privacy: .public)：录制自动暂停")
+    }
+
     /// 收起控制条、红框、点击高亮层
     private func hideChrome() {
+        stopWatchingSystemEvents()
+        autoPauseNote = nil
         controlBar?.close()
         controlBar = nil
         frameWindow?.close()
@@ -249,6 +308,7 @@ final class RecordingManager: ObservableObject {
         let pause = state == .recording
         recorder.setPaused(pause)
         state = pause ? .paused : .recording
+        if !pause { autoPauseNote = nil }
         frameWindow?.isPaused = pause
         controlBar?.refresh()
         Log.capture.notice("录制已\(pause ? "暂停" : "继续", privacy: .public)")

@@ -56,8 +56,12 @@ final class CaptureCoordinator {
     }
 
     func handleHotkey(_ action: HotkeyManager.Action) {
-        // 长截图进行中：其他截图、录屏都等它结束（用控制条上的「完成」或「取消」）
-        guard longCaptureSession == nil else { return }
+        // 长截图进行中：其他截图、录屏都等它结束（用控制条上的「完成」或「取消」）。
+        // 例外：边录屏边长截图时，录屏快捷键照样能停止录屏（不开始新的录屏选区）
+        guard longCaptureSession == nil else {
+            if action == .recording { stopRecordingIfActive() }
+            return
+        }
         switch action {
         case .screenshot, .translate:
             let purpose: ScreenshotSession.Purpose = action == .screenshot ? .screenshot : .translate
@@ -73,13 +77,21 @@ final class CaptureCoordinator {
             if let session = recordingSession {
                 session.toggleMode()
             } else if screenshotSession == nil {
-                switch RecordingManager.shared.state {
-                case .idle: beginRecording()
-                case .recording, .paused: Task { await RecordingManager.shared.stop() }   // 录制中（包括暂停时）按录屏快捷键 = 停止
-                case .countingDown: RecordingManager.shared.cancelCountdown()
-                case .starting, .stopping: break
+                if RecordingManager.shared.state == .idle {
+                    beginRecording()
+                } else {
+                    stopRecordingIfActive()
                 }
             }
+        }
+    }
+
+    /// 录制中（包括暂停时）按录屏快捷键 = 停止；倒计时中 = 取消
+    private func stopRecordingIfActive() {
+        switch RecordingManager.shared.state {
+        case .recording, .paused: Task { await RecordingManager.shared.stop() }
+        case .countingDown: RecordingManager.shared.cancelCountdown()
+        case .idle, .starting, .stopping: break
         }
     }
 

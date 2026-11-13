@@ -133,6 +133,35 @@ enum DebugMemoryShot {
             }
             try? await Task.sleep(for: .seconds(3))
             note("启动后空闲")
+            // 反复截图：VELOS_MEMORY_ROUNDS=次数 时，只反复打开、取消截图界面，看内存会不会随次数一直涨（检查泄漏）
+            if let rounds = Int(ProcessInfo.processInfo.environment["VELOS_MEMORY_ROUNDS"] ?? ""), rounds > 0 {
+                let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                              context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                              isARepeat: false, keyCode: 53)!
+                // VELOS_MEMORY_TRANSLATE=1：改成反复截屏翻译（单击合成桌面上的窗口 → 识别、翻译 → 关掉结果窗口）
+                let translate = ProcessInfo.processInfo.environment["VELOS_MEMORY_TRANSLATE"] != nil
+                let name = translate ? "截屏翻译" : "截图"
+                for round in 1...rounds {
+                    CaptureCoordinator.shared.beginScreenshot(purpose: translate ? .translate : .screenshot)
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard let session = CaptureCoordinator.shared.debugSession else { note("第 \(round) 次：\(name)没有启动"); break }
+                    if translate {
+                        let point = DebugUITest.debugPointInWindowA
+                        session.overlayMouseMoved(to: point)
+                        session.overlayMouseDown(at: point)
+                        session.overlayMouseUp(at: point)
+                        try? await Task.sleep(for: .seconds(2))
+                        ScreenTranslateController.shared.debugCloseAll()
+                    } else {
+                        _ = session.overlayKeyDown(escape)
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))
+                    if round % 5 == 0 { note("反复\(name) \(round) 次后") }
+                }
+                try? await Task.sleep(for: .seconds(5))
+                note("结束（进程保留）")
+                return
+            }
             let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
                                          characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
             for round in 1...3 {

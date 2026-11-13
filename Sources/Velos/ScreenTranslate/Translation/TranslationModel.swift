@@ -328,7 +328,19 @@ final class TranslationModel: ObservableObject {
     }
 
     /// 正在准备或进行翻译（还没有结果）
-    var isPending: Bool { status == .checking || status == .translating }
+    var isPending: Bool { Self.isPending(status) }
+    nonisolated static func isPending(_ status: Status) -> Bool { status == .checking || status == .translating }
+
+    /// 等到不再「准备或进行翻译」：跟着状态变化等，不轮询（等待期间不占 CPU）；等待的任务被取消时立刻结束
+    func waitUntilSettled() async {
+        await Self.waitUntilSettled($status)
+    }
+
+    /// 按状态的发布者等（单独拿出来，单元测试直接测这一段）。
+    /// @Published 在赋值之前发出新值，所以按发出的值判断，不读 status
+    nonisolated static func waitUntilSettled(_ status: Published<Status>.Publisher) async {
+        for await value in status.values where !isPending(value) { return }
+    }
 
     /// 交换原文和目标语言（自动检测时用检测到的语言）
     func swapLanguages() {

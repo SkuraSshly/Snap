@@ -15,6 +15,8 @@ final class RecordingControlBar: NSPanel {
     private let bar = FrostedPanel(blending: .behindWindow)
     private let dot = NSView()
     private let timeLabel = NSTextField(labelWithString: "00:00")
+    /// 熄屏、锁屏时自动暂停的说明（「屏幕熄灭时自动暂停了」）；没有时隐藏
+    private let noteLabel = NSTextField(labelWithString: "")
     private let separator = WarmSeparator()
     private let pauseButton = ToolbarButton(symbol: "pause.fill", help: "暂停")
     private let microphoneButton = ToolbarButton(symbol: "mic.fill", help: "麦克风静音")
@@ -42,7 +44,10 @@ final class RecordingControlBar: NSPanel {
         dot.layer?.cornerRadius = 4
         timeLabel.font = roundedFont(ofSize: 14, weight: .semibold, monospacedDigits: true)
         timeLabel.lineBreakMode = .byClipping
-        for view in [dot, timeLabel, separator, pauseButton, microphoneButton, stopButton] as [NSView] {
+        noteLabel.font = roundedFont(ofSize: 12, weight: .medium)
+        noteLabel.lineBreakMode = .byClipping
+        noteLabel.isHidden = true
+        for view in [dot, timeLabel, noteLabel, separator, pauseButton, microphoneButton, stopButton] as [NSView] {
             bar.addSubview(view)
         }
         pauseButton.action = { [weak manager] in manager?.togglePause() }
@@ -75,6 +80,13 @@ final class RecordingControlBar: NSPanel {
         dot.layer?.backgroundColor = (paused ? WarmPalette.apricot : OverlayAccent.recording).cgColor
         pauseButton.setSymbol(paused ? "play.fill" : "pause.fill")
         pauseButton.toolTip = paused ? "继续录制" : "暂停录制"
+        let note = manager.autoPauseNote
+        if noteLabel.stringValue != (note ?? "") || noteLabel.isHidden != (note == nil) {
+            noteLabel.stringValue = note ?? ""
+            noteLabel.isHidden = note == nil
+            noteLabel.textColor = WarmPalette(for: bar).secondaryInk
+            relayout()
+        }
 
         microphoneButton.isHidden = !manager.capturesMicrophone && !manager.microphoneUnavailable
         if manager.microphoneUnavailable {
@@ -113,6 +125,11 @@ final class RecordingControlBar: NSPanel {
         let labelSize = timeLabel.fittingSize
         timeLabel.frame = CGRect(x: x, y: ((h - labelSize.height) / 2).rounded(), width: ceil(labelSize.width), height: labelSize.height)
         x += ceil(labelSize.width) + 10
+        if !noteLabel.isHidden {
+            let noteSize = noteLabel.fittingSize
+            noteLabel.frame = CGRect(x: x, y: ((h - noteSize.height) / 2).rounded(), width: ceil(noteSize.width), height: noteSize.height)
+            x += ceil(noteSize.width) + 10
+        }
         separator.frame = CGRect(x: x, y: (h - 20) / 2, width: 1, height: 20)
         x += 1 + 6
         pauseButton.frame = CGRect(x: x, y: (h - button) / 2, width: button, height: button)
@@ -126,11 +143,15 @@ final class RecordingControlBar: NSPanel {
         stopButton.frame = CGRect(x: x, y: (h - 30) / 2, width: stopWidth, height: 30)
         x += stopWidth + 7
 
-        // 保持左下角位置不变，只改宽度
+        // 保持左下角位置不变，只改宽度；变宽后右边超出屏幕的话往左挪（例如多出自动暂停的说明）
         let inset = Self.shadowInset
-        let origin = frame.origin
+        var origin = frame.origin
+        let width = x + inset * 2
+        if let visible = screen?.visibleFrame, origin.x + width - inset > visible.maxX - 8 {
+            origin.x = max(visible.maxX - 8 - width + inset, visible.minX + 8 - inset)
+        }
         bar.frame = CGRect(x: inset, y: inset, width: x, height: h)
-        setFrame(CGRect(x: origin.x, y: origin.y, width: x + inset * 2, height: h + inset * 2), display: true)
+        setFrame(CGRect(x: origin.x, y: origin.y, width: width, height: h + inset * 2), display: true)
     }
 
     /// 放在录制区域下方居中；下方放不下放上方；全屏录制放在屏幕底部居中
@@ -152,6 +173,8 @@ final class RecordingControlBar: NSPanel {
     }
 
     #if DEBUG
+    /// 自测：控制条上显示的自动暂停说明（隐藏时为 nil）
+    var debugNote: String? { noteLabel.isHidden ? nil : noteLabel.stringValue }
     var debugBarFrame: CGRect { bar.frame.offsetBy(dx: frame.minX, dy: frame.minY) }
     var debugTimeText: String { timeLabel.stringValue }
     var debugMicrophoneVisible: Bool { !microphoneButton.isHidden }

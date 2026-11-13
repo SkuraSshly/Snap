@@ -94,8 +94,10 @@ final class AnnotationToolbar: NSView {
 
         for tool in AnnotationTool.allCases {
             let button = ToolbarButton(symbol: tool.symbol, help: tool.title)
-            button.action = { [weak self] in
-                guard let self else { return }
+            // 弱引用 button：按钮持有这个闭包，闭包再强引用按钮就成了循环引用，
+            // 每次截图后工具栏的按钮（连同图标、图层）都释放不掉，用得越多内存越高
+            button.action = { [weak self, weak button] in
+                guard let self, let button else { return }
                 // 再点一次当前工具：取消选择（回到调整选区）
                 self.onSelectTool?(button.isSelected ? nil : tool)
             }

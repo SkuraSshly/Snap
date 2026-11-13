@@ -78,10 +78,10 @@ enum EngineID: String, CaseIterable, Identifiable, Sendable {
     func credential(_ key: String) -> String { EngineKeychain.get("\(rawValue).\(key)") }
     func setCredential(_ value: String, for key: String) { EngineKeychain.set(value, for: "\(rawValue).\(key)") }
 
-    /// 必填字段都填了（区域、地域、Claude 的模型可以不填）
+    /// 必填字段都填了（区域、地域、Claude 的模型可以不填）。只查钥匙串条目在不在，不读 Key 的内容（不弹密码框）
     var hasCredentials: Bool {
         fields.filter { !($0.key == "region" || (self == .claude && $0.key == "model")) }
-            .allSatisfy { !credential($0.key).isEmpty }
+            .allSatisfy { EngineKeychain.exists("\(rawValue).\($0.key)") }
     }
 
     /// 在线翻译；source 为 nil 时让服务自动检测。大模型引擎一边生成一边通过 onPartial 回报（其他引擎一次返回）

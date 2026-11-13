@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import Synchronization
 
 // 在线翻译引擎的公共部分：错误、网络请求、签名、钥匙串。
 // 只有用户在设置里启用并填写了 Key 的引擎才会联网；原文只发送给所选的服务商，Velos 不发送任何别的数据。
@@ -89,6 +90,11 @@ enum EngineCrypto {
 }
 
 /// 引擎的 Key 存在钥匙串里（不写进设置文件）。条目：服务 local.velos.Velos.engines，账户「引擎.字段」
+///
+/// 少弹密码框：Velos 没有开发者证书，每次更新签名都不同，钥匙串把新版本当成另一个 App——
+/// 读 Key 的内容要弹密码框问一次（点「始终允许」后，直到下次更新都不再问）。所以：
+/// - 只想知道「填了没有」时，只查条目在不在（不解密内容，不弹框）
+/// - 读过的内容在这次运行里记住，不反复去钥匙串取
 enum EngineKeychain {
     #if DEBUG
     /// 调试版用单独的条目：不读正式版存的 Key（签名不同，读的时候系统会弹窗要求允许），自测写入的测试 Key 也不会碰到正式版的
@@ -97,19 +103,43 @@ enum EngineKeychain {
     static let service = "local.velos.Velos.engines"
     #endif
 
+    /// 这次运行里读过、写过的内容（"" 表示没有这个条目）
+    private static let cache = Mutex<[String: String]>([:])
+
     static func get(_ account: String) -> String {
+        if let cached = cache.withLock({ $0[account] }) { return cached }
         var query = baseQuery(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let value = (result as? Data).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        // 用户在密码框点了「拒绝」之类的失败不记住：下次用到时再问
+        if status == errSecSuccess || status == errSecItemNotFound {
+            cache.withLock { $0[account] = value }
+        }
+        return value
+    }
+
+    #if DEBUG
+    /// 自测：忘掉这次运行里记住的内容，之后的读取直接查钥匙串（检查「真的存进去了、真的删掉了」）
+    static func debugForget() { cache.withLock { $0.removeAll() } }
+    #endif
+
+    /// 有没有填（空值不会存进钥匙串，所以「条目在」就是「填了」）。只查属性、不读内容，不弹密码框
+    static func exists(_ account: String) -> Bool {
+        if let cached = cache.withLock({ $0[account] }) { return !cached.isEmpty }
+        var query = baseQuery(account)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
     }
 
     /// 写入；空字符串表示删除
     static func set(_ value: String, for account: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        cache.withLock { $0[account] = trimmed }
         if trimmed.isEmpty {
             SecItemDelete(baseQuery(account) as CFDictionary)
             return
