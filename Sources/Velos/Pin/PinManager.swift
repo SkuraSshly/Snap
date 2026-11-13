@@ -29,7 +29,9 @@ final class PinManager {
             ?? NSScreen.main ?? NSScreen.screens[0]
         let frame = Self.pinFrame(size: size, source: capture.sourceRect, screen: screen.frame, visible: screen.visibleFrame)
 
-        let window = PinWindow(capture: capture, image: image, frame: frame)
+        // 窗口比图大一圈（看不见的抓取边，见 PinWindow）
+        let window = PinWindow(capture: capture, image: image,
+                               frame: frame.insetBy(dx: -PinWindow.gripMargin, dy: -PinWindow.gripMargin))
         windows.append(window)
         // 关闭时移出列表（窗口和整张图随之释放），并注销这个通知
         let id = ObjectIdentifier(window)
@@ -38,6 +40,7 @@ final class PinManager {
             MainActor.assumeIsolated { self?.didClose(id) }
         }
         window.orderFrontRegardless()
+        window.makeKey()   // 钉上就选中：显示杏色边框，按 Esc 就能关
         return window
     }
 
