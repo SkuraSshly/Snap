@@ -6,7 +6,7 @@
 
 <p align="center">
   原生、轻巧的 macOS 截图工具：截图标注、长截图、录屏、截屏翻译<br>
-  <sub>下载约 3 MB · 空闲内存约 14–50 MB · 默认不联网 · 不收集任何数据 · 没有第三方依赖</sub>
+  <sub>下载约 4 MB · 空闲内存约 14–50 MB · 默认不联网 · 不收集任何数据 · 没有第三方依赖</sub>
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@ Velos（βέλος）在希腊语里是「箭」——像箭一样快、准地�
 
 需要 **macOS 15 或更新**、**Apple 芯片**的 Mac。
 
-1. 在 [Releases](https://github.com/SkuraSshly/Velos/releases/latest) 下载 `Velos-2.2.dmg`，把 Velos 拖进「应用程序」。
+1. 在 [Releases](https://github.com/SkuraSshly/Velos/releases/latest) 下载 `Velos-2.3.dmg`，把 Velos 拖进「应用程序」。
 2. 打开 Velos，按引导打开 **屏幕与系统录音** 权限（必需）。麦克风（录自己的声音）、辅助功能（长截图的自动滚动）用到时再开。
 
 > 这个版本没有 Apple 开发者证书签名和公证，第一次打开时 macOS 会拦下。到 **系统设置 › 隐私与安全性**，在页面下方点 **「仍要打开」**，只需一次。
@@ -75,7 +75,7 @@ open build/Velos.app
 | `./run.sh` | 编译并重新启动 |
 | `./package.sh` | 打包成 `dist/Velos-版本号.dmg` 和 `.zip` |
 
-源码在 `Sources/Velos`（按功能分文件夹），文字识别在 `Sources/VelosOCRKit`，由单独的识别服务进程调用。App 图标由 `scripts/make-icon.swift` 用代码绘制。
+源码在 `Sources/Velos`（按功能分文件夹），文字识别在 `Sources/VelosOCRKit`，由单独的识别服务进程 VelosOCR 调用；设置窗口在子进程 VelosSettings 里打开（同一份程序，见 `Sources/Velos/App/SettingsProcess.swift`），两者用完 30 秒后自己退出。App 图标由 `scripts/make-icon.swift` 用代码绘制。
 
 ## 许可证
 
