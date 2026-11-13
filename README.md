@@ -16,9 +16,20 @@
   <a href="docs/卸载说明.md">卸载说明</a>
 </p>
 
-<p align="center">
-  <img src="docs/images/screenshot-annotate.png" width="680" alt="截图后在原位标注">
-</p>
+<table align="center">
+  <tr>
+    <td align="center"><a href="docs/images/settings-general.png"><img src="docs/images/settings-general.png" height="200" alt="设置"></a><br><sub><b>设置</b>：温暖、一目了然</sub></td>
+    <td align="center"><a href="docs/images/screenshot-annotate.png"><img src="docs/images/screenshot-annotate.png" height="200" alt="截图"></a><br><sub><b>截图</b>：框选后在原位标注</sub></td>
+  </tr>
+</table>
+<table align="center">
+  <tr>
+    <td align="center"><a href="docs/images/long-capture.png"><img src="docs/images/long-capture.png" height="140" alt="长截图"></a><br><sub><b>长截图</b>：边滚边拼，旁边实时预览</sub></td>
+    <td align="center"><a href="docs/images/recording-controls.png"><img src="docs/images/recording-controls.png" height="140" alt="录屏"></a><br><sub><b>录屏</b>：控制条和红框不录进视频</sub></td>
+    <td align="center"><a href="docs/images/translate.png"><img src="docs/images/translate.png" height="140" alt="截屏翻译"></a><br><sub><b>截屏翻译</b>：松开鼠标就出结果</sub></td>
+  </tr>
+</table>
+<p align="center"><sub>点击图片查看大图</sub></p>
 
 Velos（βέλος）在希腊语里是「箭」——像箭一样快、准地截下屏幕上的东西。
 
@@ -30,13 +41,6 @@ Velos（βέλος）在希腊语里是「箭」——像箭一样快、准地�
 | **长截图** | 框选后点工具栏的剪刀按钮，滚动页面，Velos 边滚边拼接；标题栏、输入框只出现一次；不改动你的滚动（鼠标、触控板、滚动工具都照常），滚得太快跟丢时自动接回；也可以点「自动滚动」让它匀速慢慢滚。 |
 | **录屏** <kbd>⌥S</kbd> | 区域或全屏，系统声音和麦克风混成一条音轨，可暂停；倒计时、点击高亮、导出 GIF。录制中照样能截图、翻译，并一起录进视频。 |
 | **截屏翻译** <kbd>⌥D</kbd> | 框选文字，离线识别、用 Apple 翻译离线翻译；单个单词查系统词典。也可以接入自己的翻译服务（腾讯、火山、百度、DeepL、OpenAI 兼容大模型等）。 |
-
-<table>
-  <tr>
-    <td width="60%"><img src="docs/images/long-capture.png" alt="长截图"><br><sub><b>长截图</b>：在选区里滚动，旁边实时预览拼好的长图</sub></td>
-    <td width="40%"><img src="docs/images/translate.png" alt="截屏翻译"><br><sub><b>截屏翻译</b>：松开鼠标就出结果，全部在本机完成</sub></td>
-  </tr>
-</table>
 
 ## 安装
 

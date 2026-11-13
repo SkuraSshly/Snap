@@ -105,7 +105,7 @@ public struct TextRecognizer: Sendable {
         // 文字短、语言不明确：多个候选语言分别识别，挑最可信的
         if !confident, options.selectsBestCandidate, options.language == nil, !detection.probabilities.isEmpty {
             if let best = try await bestCandidate(image, pointSize: pointSize, candidates: detection.probabilities,
-                                                  minimumLetters: Self.letterCount(roughText)) {
+                                                  roughText: roughText) {
                 result = best
             }
         }
@@ -137,8 +137,12 @@ public struct TextRecognizer: Sendable {
     /// 与 Easydict 不同的一点：指定单一语言识别时，Vision 会把别的文字整行丢掉（例如指定英文时
     /// 「Velos translate test / 截屏翻译自测」只剩英文那行，而且置信度是 1.0，会胜出）。
     /// 所以候选结果的字数比自动识别少了一成以上的，不参加比较——宁可保留完整的自动识别结果。
+    /// 还有一种：指定的语言用的是拉丁字母时，Vision 也可能不丢掉中文那行，而是把它认成一串拉丁字母乱码
+    /// （例如指定德语时「截屏翻译自测」变成「ÄMì·áN」，字数差不多，乱码又恰好被判断成德语，就会胜出）。
+    /// 所以候选结果还要保住自动识别里的非拉丁文字（汉字、假名、谚文、西里尔字母……），丢了一成以上的也不参加比较。
     private func bestCandidate(_ image: CGImage, pointSize: CGSize, candidates: [TranslateLanguage: Double],
-                               minimumLetters: Int) async throws -> OCRResult? {
+                               roughText: String) async throws -> OCRResult? {
+        let minimumLetters = Self.letterCount(roughText)
         let languages = candidates.sorted { $0.value > $1.value }.map(\.key)
         var single = self
         single.options.selectsBestCandidate = false
@@ -154,7 +158,9 @@ public struct TextRecognizer: Sendable {
             return collected
         }
         try Task.checkCancellation()
-        let complete = results.filter { Double(Self.letterCount($0.text)) >= Double(minimumLetters) * 0.9 }
+        let complete = results.filter {
+            Double(Self.letterCount($0.text)) >= Double(minimumLetters) * 0.9 && Self.keepsScripts(of: roughText, in: $0.text)
+        }
         guard !complete.isEmpty else { return nil }
 
         let detector = self.detector
@@ -168,6 +174,33 @@ public struct TextRecognizer: Sendable {
             return boosted
         }
         return (trusted.isEmpty ? complete : trusted).max { $0.confidence < $1.confidence }
+    }
+
+    /// 候选结果有没有保住原文（自动识别）里的非拉丁文字：每一种文字系统的字符数都不少于原文的九成
+    static func keepsScripts(of original: String, in candidate: String) -> Bool {
+        let before = scriptCounts(original), after = scriptCounts(candidate)
+        return before.allSatisfy { script, count in Double(after[script] ?? 0) >= Double(count) * 0.9 }
+    }
+
+    /// 非拉丁文字系统的字符数（拉丁字母不数：乱码多出来的正是拉丁字母）
+    private static func scriptCounts(_ text: String) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for scalar in text.unicodeScalars {
+            let script: String? = switch scalar.value {
+            case 0x4E00...0x9FFF, 0x3400...0x4DBF, 0xF900...0xFAFF, 0x20000...0x2FA1F: "han"
+            case 0x3040...0x30FF, 0x31F0...0x31FF: "kana"
+            case 0xAC00...0xD7AF, 0x1100...0x11FF, 0x3130...0x318F: "hangul"
+            case 0x0400...0x052F: "cyrillic"
+            case 0x0370...0x03FF: "greek"
+            case 0x0600...0x06FF: "arabic"
+            case 0x0590...0x05FF: "hebrew"
+            case 0x0E00...0x0E7F: "thai"
+            case 0x0900...0x097F: "devanagari"
+            default: nil
+            }
+            if let script { counts[script, default: 0] += 1 }
+        }
+        return counts
     }
 
     /// 字母、汉字、数字的个数（不算空白和标点）
