@@ -407,6 +407,8 @@ enum DebugUITest {
             check("钉图钉在原位、原始大小", pin.frame == expected, "期望 \(expected)，得到 \(pin.frame)")
             check("钉图出现后缩略图收起", ThumbnailManager.shared.visibleCount == 0)
             check("钉上以后自动选中（显示杏色边框，按 Esc 就能关）", pin.isKeyWindow && (pin.contentView as? PinView)?.isSelected == true)
+            try? await Task.sleep(for: .milliseconds(600))
+            check("钉上半秒后仍然选中、Velos 在前台（边缘能显示小三角）", pin.isKeyWindow && NSApp.isActive)
             try? await Task.sleep(for: .milliseconds(300))
             await captureComposite(around: pin.frame, to: dir.appendingPathComponent("7-钉图实际显示.png"))
             pin.makeKey()
@@ -460,6 +462,7 @@ enum DebugUITest {
         await runTranslateChecks(dir: dir, check: check)
         await runLongCaptureChecks(dir: dir, check: check)
         await testDockIcon(check)
+        await testPinFromToolbar(check)
         ToolStyleMemory.debugCleanUp()
         report(check.lines, to: dir)
     }
@@ -1217,6 +1220,25 @@ enum DebugUITest {
                 pin.close()
             }
         }
+    }
+
+    /// 从截图工具栏钉图：截图界面关掉后焦点不还给原来的 App，钉图保持选中
+    private static func testPinFromToolbar(_ check: Checks) async {
+        CaptureCoordinator.shared.beginScreenshot()
+        try? await Task.sleep(for: .milliseconds(600))
+        guard let session = CaptureCoordinator.shared.debugSession else { return check("从工具栏钉图：截图界面", false) }
+        let point = DebugUITest.debugPointInWindowA
+        session.overlayMouseMoved(to: point)
+        session.overlayMouseDown(at: point)
+        session.overlayMouseUp(at: point)
+        try? await Task.sleep(for: .milliseconds(200))
+        let before = PinManager.shared.count
+        session.debugPerform(.pin)
+        try? await Task.sleep(for: .milliseconds(800))
+        let pin = NSApp.windows.compactMap { $0 as? PinWindow }.last
+        check("从截图工具栏钉图：钉上 0.8 秒后仍然选中、Velos 在前台", PinManager.shared.count == before + 1
+              && pin?.isKeyWindow == true && NSApp.isActive, "钉图 \(PinManager.shared.count - before) 张，选中 \(pin?.isKeyWindow == true)，前台 \(NSApp.isActive)")
+        pin?.close()
     }
 
     /// 程序坞图标：设置里打开后出现、右键菜单和菜单栏菜单一样（没有重复的「退出」）、关掉后消失

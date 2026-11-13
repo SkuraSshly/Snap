@@ -38,7 +38,10 @@ final class PinManager {
             MainActor.assumeIsolated { self?.didClose(id) }
         }
         window.orderFrontRegardless()
-        window.makeKey()   // 钉上就选中：显示杏色边框，可以直接拖动、拖边缘调整大小，按 Esc 就能关
+        // 钉上就选中：显示杏色边框，可以直接拖动、拖边缘调整大小，按 Esc 就能关。
+        // Velos 要在前台：macOS 只让前台 App 改鼠标指针（边缘上的小三角）、收键盘（Esc）
+        NSApp.activate()
+        window.makeKey()
         return window
     }
 

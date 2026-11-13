@@ -190,7 +190,9 @@ final class ScreenshotSession: OverlayEventHandler {
         finish()
     }
 
-    private func finish() {
+    /// - Parameter restoreFocus: 把焦点还给截图前正在用的 App。钉图时不还：Velos 留在前台、钉图保持选中，
+    ///   鼠标放到钉图边缘就是调整大小的小三角（macOS 只让前台 App 改鼠标指针），点别的窗口时焦点照常过去
+    private func finish(restoreFocus: Bool = true) {
         guard !isFinished else { return }
         isFinished = true
         for (center, token) in observers { center.removeObserver(token) }
@@ -211,7 +213,7 @@ final class ScreenshotSession: OverlayEventHandler {
         displays.removeAll()   // 释放底图（每块屏幕十几到二十几 MB）
         NSCursor.arrow.set()
         HotkeyManager.shared.resume(hotkeyAction)
-        frontmost?.restorePreviousApp()
+        if restoreFocus { frontmost?.restorePreviousApp() }
         onFinish?()
     }
 
@@ -303,7 +305,7 @@ final class ScreenshotSession: OverlayEventHandler {
     /// 钉图：把结果（含标注）直接钉在原位，不复制、不保存
     private func pinResult() {
         guard let result = makeResult() else { return }
-        finish()
+        finish(restoreFocus: false)
         _ = PinManager.shared.pin(CapturedImage(image: result.image, scale: result.scale, sourceRect: result.sourceRect))
     }
 
@@ -771,6 +773,8 @@ final class ScreenshotSession: OverlayEventHandler {
     var debugAnnotator: AnnotationController? { annotator }
     var debugOverlayLevel: Int { overlays[activeDisplayID]?.level.rawValue ?? -1 }
     var debugToolbar: AnnotationToolbar { toolbar }
+    /// 自测：模拟点工具栏上的按钮
+    func debugPerform(_ action: AnnotationToolbar.Action) { perform(action) }
     var debugCornerBar: CornerRadiusBar { cornerBar }
     /// 自测：现在按 Enter 会得到的图
     func debugResultImage() -> CGImage? { makeResult()?.image }
