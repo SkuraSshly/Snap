@@ -20,6 +20,8 @@ struct GeneralSettingsView: View {
                 }
                 SwitchRow(icon: "menubar.rectangle", tint: .chipCocoa, title: "显示菜单栏图标",
                           caption: "隐藏后通过快捷键使用；再次打开 Velos 应用即可回到这里。", isOn: $prefs.showMenuBarIcon)
+                SwitchRow(icon: "dock.rectangle", tint: .chipSky, title: "在程序坞显示图标",
+                          caption: "点程序坞里的图标打开设置；右键可以截图、录屏、截屏翻译。", isOn: $prefs.showDockIcon)
             }
 
             SettingsSection(title: "系统权限") {

@@ -10,6 +10,7 @@ enum ScrollAxis: Sendable {
 /// 钉在屏幕上的截图：置顶的浮动小窗。
 /// - 单击选中（杏色边框），选中后按 Esc 关闭、⌘C 复制；双击直接关闭
 /// - 拖动移动；滚轮 / 触控板双指捏合缩放（以鼠标位置为中心）
+/// - 拖边缘、四个角调整大小：保持长宽比，对面的边 / 角不动（边缘上是暖色的调整大小光标）
 /// - 长截图：窗口只露出一段，滚轮在窗口里翻看；⌥ + 滚轮、双指捏合缩放
 /// - ⌘ + 滚轮调整透明度；右键菜单里也有透明度、原始大小、复制、存储
 /// 窗口是「不激活」的面板：选中它不会把正在用的 App 切到后台。
@@ -79,6 +80,22 @@ final class PinView: NSView {
     private var scrollOffset: CGFloat = 0
     private static let zoomRange: ClosedRange<CGFloat> = 0.1...8
     private static let opacityRange: ClosedRange<CGFloat> = 0.2...1
+
+    /// 拖边缘调整大小：边缘往里多宽、角落多大的范围能抓住（钉图很小时按比例缩小，中间总留一块用来移动）
+    private static let edgeGrip: CGFloat = 6
+    private static let cornerGrip: CGFloat = 14
+    /// 钉图最小多大（点）
+    private static let minimumSide: CGFloat = 40
+
+    /// 正在拖边缘：哪个边 / 角、按下时鼠标的位置（屏幕坐标）、窗口的位置和大小、缩放比例
+    private struct Resize {
+        let handle: RegionSelector.Handle
+        let start: CGPoint
+        let frame: CGRect
+        let zoom: CGFloat
+    }
+    private var resizing: Resize?
+    private var trackingArea: NSTrackingArea?
 
     init(capture: CapturedImage, image: CGImage) {
         self.capture = capture
@@ -183,9 +200,127 @@ final class PinView: NSView {
             window?.close()
             return
         }
-        // 单击：选中这张钉图（之后按 Esc 关闭）；按住拖动：移动窗口（系统负责跟随鼠标，松开时返回）
         window?.makeKey()
+        // 按在边缘、角上：调整大小（之后的拖动在 mouseDragged 里）
+        if let handle = handle(at: convert(event.locationInWindow, from: nil)), let window {
+            resizing = Resize(handle: handle, start: NSEvent.mouseLocation, frame: window.frame, zoom: zoom)
+            handle.cursor.set()
+            return
+        }
+        // 单击：选中这张钉图（之后按 Esc 关闭）；按住拖动：移动窗口（系统负责跟随鼠标，松开时返回）
         window?.performDrag(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let resizing else { return super.mouseDragged(with: event) }
+        let point = NSEvent.mouseLocation
+        resize(resizing, by: CGSize(width: point.x - resizing.start.x, height: point.y - resizing.start.y))
+        resizing.handle.cursor.set()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard resizing != nil else { return super.mouseUp(with: event) }
+        resizing = nil
+        updateCursor(at: convert(event.locationInWindow, from: nil))
+    }
+
+    // MARK: - 拖边缘调整大小
+
+    /// 鼠标下面是哪个边 / 角（窗口里面靠边的一圈）；中间返回 nil（拖动是移动）
+    func handle(at p: CGPoint) -> RegionSelector.Handle? {
+        let w = bounds.width, h = bounds.height
+        let grip = min(Self.edgeGrip, w / 4, h / 4), corner = min(Self.cornerGrip, w / 3, h / 3)
+        let left = p.x <= grip, right = p.x >= w - grip, bottom = p.y <= grip, top = p.y >= h - grip
+        guard left || right || bottom || top else { return nil }
+        let nearLeft = p.x <= corner, nearRight = p.x >= w - corner, nearBottom = p.y <= corner, nearTop = p.y >= h - corner
+        if nearTop && nearLeft { return .topLeft }
+        if nearTop && nearRight { return .topRight }
+        if nearBottom && nearLeft { return .bottomLeft }
+        if nearBottom && nearRight { return .bottomRight }
+        if left { return .left }
+        if right { return .right }
+        return top ? .top : .bottom
+    }
+
+    /// 按拖动的距离调整大小（都从按下时的样子算，不会越拖越偏）。
+    /// - 普通钉图、长截图拖角、长截图拖短边：保持长宽比缩放，对面的边 / 角不动
+    /// - 长截图拖长的那个方向的边（竖着长的拖上下边）：只改窗口露出多少，不缩放
+    private func resize(_ r: Resize, by d: CGSize) {
+        guard let window else { return }
+        let f = r.frame
+        var width = f.width, height = f.height
+        switch r.handle {
+        case .left, .topLeft, .bottomLeft: width -= d.width
+        case .right, .topRight, .bottomRight: width += d.width
+        case .top, .bottom: break
+        }
+        switch r.handle {
+        case .top, .topLeft, .topRight: height += d.height
+        case .bottom, .bottomLeft, .bottomRight: height -= d.height
+        case .left, .right: break
+        }
+        let alongLong = (longAxis == .vertical && (r.handle == .top || r.handle == .bottom))
+            || (longAxis == .horizontal && (r.handle == .left || r.handle == .right))
+        if alongLong {
+            // 只改露出的长度：在最小大小和整张图的长度之间；对面的边不动
+            var frame = f
+            if longAxis == .vertical {
+                frame.size.height = min(max(height, Self.minimumSide), imageSize.height).rounded()
+                if r.handle == .bottom { frame.origin.y = f.maxY - frame.height }
+            } else {
+                frame.size.width = min(max(width, Self.minimumSide), imageSize.width).rounded()
+                if r.handle == .left { frame.origin.x = f.maxX - frame.width }
+            }
+            window.setFrame(frame, display: true)
+            return
+        }
+        // 缩放：拖边按这条边的方向算，拖角按动得多的那个方向算
+        let sx = width / f.width, sy = height / f.height
+        let scale: CGFloat = switch r.handle {
+        case .left, .right: sx
+        case .top, .bottom: sy
+        default: abs(sx - 1) >= abs(sy - 1) ? sx : sy
+        }
+        let smallest = Self.minimumSide / min(f.width, f.height)
+        // 对面的边 / 角不动：以它为中心缩放（位置用比例表示：0 是左 / 下，1 是右 / 上）
+        let (fx, fy): (CGFloat, CGFloat) = switch r.handle {
+        case .left: (1, 0.5)
+        case .right: (0, 0.5)
+        case .top: (0.5, 0)
+        case .bottom: (0.5, 1)
+        case .topLeft: (1, 0)
+        case .topRight: (0, 0)
+        case .bottomLeft: (1, 1)
+        case .bottomRight: (0, 1)
+        }
+        setZoom(r.zoom * max(scale, smallest), anchor: CGPoint(x: fx * bounds.width, y: fy * bounds.height))
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .cursorUpdate, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateCursor(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        updateCursor(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if resizing == nil { NSCursor.arrow.set() }
+    }
+
+    /// 边缘、角上是暖色的调整大小光标（和截图选区的控制点同一种），中间是箭头
+    private func updateCursor(at point: CGPoint) {
+        guard resizing == nil else { return }
+        (handle(at: point)?.cursor ?? .arrow).set()
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -307,6 +442,11 @@ final class PinView: NSView {
     }
 
     #if DEBUG
+    /// 自测：模拟按住某个边 / 角拖动 delta（点）
+    func debugResize(_ handle: RegionSelector.Handle, by delta: CGSize) {
+        guard let window else { return }
+        resize(Resize(handle: handle, start: .zero, frame: window.frame, zoom: zoom), by: delta)
+    }
     var debugScrollOffset: CGFloat { scrollOffset }
     var debugZoom: CGFloat { zoom }
     var debugIsLong: Bool { longAxis != nil }

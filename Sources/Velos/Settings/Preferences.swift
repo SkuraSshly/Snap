@@ -69,7 +69,7 @@ final class Preferences: ObservableObject {
     static let shared = Preferences()
 
     private enum Key: String {
-        case showMenuBarIcon, screenshotDirectoryPath, recordingDirectoryPath, hasCompletedOnboarding
+        case showMenuBarIcon, showDockIcon, screenshotDirectoryPath, recordingDirectoryPath, hasCompletedOnboarding
         case imageFormat, jpegQuality, screenshotIncludesCursor, screenshotSaveAs1x, screenshotCornerRadius
         case screenshotCopyToClipboard, screenshotSaveToFile, screenshotShowThumbnail, hideThumbnailAfterPaste
         case recordingResolution, recordingFrameRate, videoCodec, videoQuality
@@ -84,6 +84,8 @@ final class Preferences: ObservableObject {
 
     // MARK: 通用
     @Published var showMenuBarIcon: Bool { didSet { Self.save(showMenuBarIcon, .showMenuBarIcon) } }
+    /// 在程序坞显示图标（默认不显示：Velos 是菜单栏工具）
+    @Published var showDockIcon: Bool { didSet { Self.save(showDockIcon, .showDockIcon) } }
     /// 截图的保存文件夹（绝对路径），默认 ~/Pictures/ScreenShots
     @Published var screenshotDirectoryPath: String { didSet { Self.save(screenshotDirectoryPath, .screenshotDirectoryPath) } }
     /// 录屏的保存文件夹（绝对路径），默认 ~/Movies/ScreenRecordings
@@ -158,6 +160,7 @@ final class Preferences: ObservableObject {
 
     private init() {
         showMenuBarIcon = Self.load(.showMenuBarIcon, true)
+        showDockIcon = Self.load(.showDockIcon, false)
         screenshotDirectoryPath = Self.load(.screenshotDirectoryPath, SaveLocation.defaultDirectory(for: .screenshot).path)
         recordingDirectoryPath = Self.load(.recordingDirectoryPath, SaveLocation.defaultDirectory(for: .recording).path)
 
@@ -219,7 +222,7 @@ final class Preferences: ObservableObject {
         func sync<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<Preferences, T>) {
             if self[keyPath: keyPath] != stored[keyPath: keyPath] { self[keyPath: keyPath] = stored[keyPath: keyPath] }
         }
-        sync(\.showMenuBarIcon); sync(\.screenshotDirectoryPath); sync(\.recordingDirectoryPath)
+        sync(\.showMenuBarIcon); sync(\.showDockIcon); sync(\.screenshotDirectoryPath); sync(\.recordingDirectoryPath)
         sync(\.imageFormat); sync(\.jpegQuality); sync(\.screenshotIncludesCursor); sync(\.screenshotSaveAs1x)
         sync(\.screenshotCornerRadius); sync(\.screenshotCopyToClipboard); sync(\.screenshotSaveToFile)
         sync(\.screenshotShowThumbnail); sync(\.hideThumbnailAfterPaste)

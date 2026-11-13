@@ -96,8 +96,29 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         rebuildMenu()
     }
 
+    /// 程序坞图标的右键菜单：和菜单栏菜单一样的内容（不带快捷键提示；「退出」由系统自己加在程序坞菜单里）
+    func makeDockMenu() -> NSMenu {
+        PermissionManager.shared.refresh()
+        let dockMenu = NSMenu()
+        dockMenu.autoenablesItems = false
+        build(into: dockMenu, forDock: true)
+        return dockMenu
+    }
+
     private func rebuildMenu() {
         menu.removeAllItems()
+        build(into: menu, forDock: false)
+    }
+
+    private func build(into menu: NSMenu, forDock: Bool) {
+        @discardableResult
+        func addItem(_ title: String, action: Selector?, key: String = "", modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: forDock ? "" : key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = self
+            menu.addItem(item)
+            return item
+        }
 
         if !PermissionManager.shared.screenRecordingGranted {
             let warning = addItem("授予屏幕录制权限…", action: #selector(showPermissions))
@@ -137,20 +158,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // 转 GIF、打开文件夹都在设置里（录屏 › GIF、通用 › 保存位置）
         menu.addItem(.separator())
         addItem("设置…", action: #selector(openSettings), key: ",")
+        guard !forDock else { return }
         menu.addItem(.separator())
 
         let quit = addItem("退出 Velos", action: #selector(NSApplication.terminate(_:)), key: "q")
         quit.target = NSApp
-    }
-
-    @discardableResult
-    private func addItem(_ title: String, action: Selector?, key: String = "",
-                         modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
-        item.keyEquivalentModifierMask = modifiers
-        item.target = self
-        menu.addItem(item)
-        return item
     }
 
     @objc private func takeScreenshot() {

@@ -1,8 +1,11 @@
 import AppKit
 
+import Combine
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBar: StatusBarController?
+    private var dockIconObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.makeMainMenu()
@@ -13,6 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         statusBar = StatusBarController()
+        // 程序坞图标（设置里可以打开）：显示时是普通 App，不显示时是只在菜单栏的工具
+        dockIconObserver = Preferences.shared.$showDockIcon.removeDuplicates().sink { visible in
+            NSApp.setActivationPolicy(visible ? .regular : .accessory)
+        }
         PermissionManager.shared.refresh()
         CaptureCoordinator.shared.start()
         LaunchAtLogin.shared.reregisterIfEnabled()   // 登录项指向正在运行的这一份 App
@@ -42,6 +49,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Velos 已在运行时再次打开它（访达双击、启动台、Spotlight、`open` 命令）会走到这里。
     /// 菜单栏图标被隐藏后，这是除快捷键之外找回设置的唯一入口，所以直接打开设置窗口。
+    /// 程序坞图标的右键菜单（显示程序坞图标时）
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        statusBar?.makeDockMenu()
+    }
+
+    /// Velos 已在运行时再次打开它，或者点了程序坞里的图标：打开设置窗口
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         SettingsLauncher.open()
         return false

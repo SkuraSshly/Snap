@@ -410,6 +410,22 @@ enum DebugUITest {
             await captureComposite(around: pin.frame, to: dir.appendingPathComponent("7-钉图实际显示.png"))
             pin.makeKey()
             check("单击选中钉图（显示杏色边框）", (pin.contentView as? PinView)?.isSelected == true)
+            if let view = pin.contentView as? PinView {
+                // 拖边缘、角调整大小（200×150 的钉图）
+                check("钉图边缘：四个角、四条边认得出，中间是移动", view.handle(at: CGPoint(x: 2, y: 148)) == .topLeft
+                      && view.handle(at: CGPoint(x: 198, y: 2)) == .bottomRight && view.handle(at: CGPoint(x: 198, y: 75)) == .right
+                      && view.handle(at: CGPoint(x: 100, y: 148)) == .top && view.handle(at: CGPoint(x: 100, y: 75)) == nil)
+                let start = pin.frame
+                view.debugResize(.bottomRight, by: CGSize(width: 40, height: -30))
+                check("拖右下角放大：保持长宽比，左上角不动", pin.frame.width == 240 && pin.frame.height == 180
+                      && pin.frame.minX == start.minX && pin.frame.maxY == start.maxY, "\(pin.frame)")
+                let before = pin.frame
+                view.debugResize(.left, by: CGSize(width: 60, height: 0))
+                check("拖左边缩小：保持长宽比，右边不动、上下居中", pin.frame.width == 180 && pin.frame.height == 135
+                      && pin.frame.maxX == before.maxX && abs(pin.frame.midY - before.midY) <= 0.5, "\(pin.frame)")
+                view.debugResize(.right, by: CGSize(width: -1000, height: 0))
+                check("钉图拖到最小也不会消失（至少 40 点）", min(pin.frame.width, pin.frame.height) >= 39.5, "\(pin.frame)")
+            }
             pin.keyDown(with: key(kVK_Escape))
             check("选中后按 Esc 关闭钉图", PinManager.shared.count == 0 && !pin.isVisible)
         } else {
@@ -442,6 +458,7 @@ enum DebugUITest {
         checkEncoder(check: check)
         await runTranslateChecks(dir: dir, check: check)
         await runLongCaptureChecks(dir: dir, check: check)
+        await testDockIcon(check)
         ToolStyleMemory.debugCleanUp()
         report(check.lines, to: dir)
     }
@@ -1189,9 +1206,32 @@ enum DebugUITest {
                 check("长截图钉图：滚轮在窗口里往下翻", view.debugScrollOffset > 0 && view.debugZoom == 1, "\(view.debugScrollOffset)")
                 if let zoomOut = wheel(-40, option: true) { view.scrollWheel(with: zoomOut) }
                 check("长截图钉图：⌥ + 滚轮缩放", view.debugZoom < 1 && pin.frame.width < 300, "\(view.debugZoom)")
+                // 拖下边：只改露出多少，不缩放；上边不动
+                let zoomBefore = view.debugZoom, frameBefore = pin.frame
+                view.debugResize(.bottom, by: CGSize(width: 0, height: 80))
+                check("长截图钉图：拖下边只改露出的长度，不缩放、上边不动", view.debugZoom == zoomBefore
+                      && pin.frame.height == frameBefore.height - 80 && pin.frame.maxY == frameBefore.maxY, "\(pin.frame)")
+                view.debugResize(.right, by: CGSize(width: 30, height: 0))
+                check("长截图钉图：拖右边是缩放", view.debugZoom > zoomBefore && pin.frame.minX == frameBefore.minX, "\(view.debugZoom)")
                 pin.close()
             }
         }
+    }
+
+    /// 程序坞图标：设置里打开后出现、右键菜单和菜单栏菜单一样（没有重复的「退出」）、关掉后消失
+    private static func testDockIcon(_ check: Checks) async {
+        let prefs = Preferences.shared
+        let saved = prefs.showDockIcon
+        prefs.showDockIcon = true
+        try? await Task.sleep(for: .milliseconds(300))
+        check("打开「在程序坞显示图标」：程序坞里出现 Velos", NSApp.activationPolicy() == .regular)
+        let titles = (NSApp.delegate as? AppDelegate)?.applicationDockMenu(NSApp)?.items.map(\.title) ?? []
+        check("程序坞右键菜单：截图、录屏、截屏翻译、设置…（「退出」由系统自己加）",
+              ["截图", "录屏", "截屏翻译", "设置…"].allSatisfy(titles.contains) && !titles.contains("退出 Velos"), "\(titles)")
+        prefs.showDockIcon = false
+        try? await Task.sleep(for: .milliseconds(300))
+        check("关掉「在程序坞显示图标」：程序坞里的图标消失", NSApp.activationPolicy() == .accessory)
+        prefs.showDockIcon = saved
     }
 
     /// 识别服务进程（VelosOCR.xpc）是否在运行

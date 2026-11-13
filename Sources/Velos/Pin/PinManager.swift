@@ -18,33 +18,16 @@ final class PinManager {
 
     var count: Int { windows.count }
 
-    /// 钉图：默认钉在截取的原位（看起来就像把那块画面「钉」住了）；
-    /// 太大（比如全屏截图）时缩小到屏幕可见区域的 60% 并居中
+    /// 钉图：原始大小（100%），钉在截取的原位（看起来就像把那块画面「钉」住了）。
+    /// - 比屏幕的可用区域还大：缩小到正好放得下，居中
+    /// - 长截图：原来的宽度（太宽才缩小），钉在原位；太长时窗口只露出一段（最多屏幕高度的 85%），在窗口里滚动翻看
+    /// - 原位不在任何屏幕上：放到屏幕中间
     func pin(_ capture: CapturedImage) -> PinWindow? {
         guard let image = capture.image else { return nil }
         let size = capture.pointSize
         let screen = NSScreen.screen(containing: CGPoint(x: capture.sourceRect.midX, y: capture.sourceRect.midY))
             ?? NSScreen.main ?? NSScreen.screens[0]
-        let visible = screen.visibleFrame
-        var frame = CGRect(origin: capture.sourceRect.origin, size: size)
-        // 原位只要在屏幕范围内就行（盖住程序坞也没关系，与 Snipaste 一致）
-        let fitsInPlace = screen.frame.contains(frame)
-            && size.width <= visible.width * 0.8 && size.height <= visible.height * 0.8
-        if let axis = PinView.longAxis(for: size) {
-            // 长截图：整张缩进屏幕会细得看不清。按能看清的大小显示（最多原大小），只露出一段，在窗口里滚动翻看
-            let zoom = axis == .vertical ? min(1, visible.width * 0.45 / size.width) : min(1, visible.height * 0.45 / size.height)
-            let shown = axis == .vertical
-                ? CGSize(width: (size.width * zoom).rounded(), height: min((size.height * zoom).rounded(), (visible.height * 0.85).rounded()))
-                : CGSize(width: min((size.width * zoom).rounded(), (visible.width * 0.85).rounded()), height: (size.height * zoom).rounded())
-            frame = CGRect(x: (visible.midX - shown.width / 2).rounded(), y: (visible.midY - shown.height / 2).rounded(),
-                           width: shown.width, height: shown.height)
-        } else if !fitsInPlace {
-            let factor = min(visible.width * 0.6 / size.width, visible.height * 0.6 / size.height, 1)
-            let fitted = CGSize(width: (size.width * factor).rounded(), height: (size.height * factor).rounded())
-            // 坐标取整：带 0.5 的位置会被系统对齐到整点，导致窗口尺寸多出 1 点
-            frame = CGRect(x: (visible.midX - fitted.width / 2).rounded(), y: (visible.midY - fitted.height / 2).rounded(),
-                           width: fitted.width, height: fitted.height)
-        }
+        let frame = Self.pinFrame(size: size, source: capture.sourceRect, screen: screen.frame, visible: screen.visibleFrame)
 
         let window = PinWindow(capture: capture, image: image, frame: frame)
         windows.append(window)
@@ -56,6 +39,37 @@ final class PinManager {
         }
         window.orderFrontRegardless()
         return window
+    }
+
+    /// 钉图窗口的位置和大小（单独拿出来，单元测试直接测）
+    static func pinFrame(size: CGSize, source: CGRect, screen: CGRect, visible: CGRect) -> CGRect {
+        // 坐标取整：带 0.5 的位置会被系统对齐到整点，导致窗口尺寸多出 1 点
+        func centered(_ s: CGSize) -> CGRect {
+            CGRect(x: (visible.midX - s.width / 2).rounded(), y: (visible.midY - s.height / 2).rounded(), width: s.width, height: s.height)
+        }
+        /// 放在原位（左上角对齐截取的位置）；超出可用区域的话挪回来
+        func inPlace(_ s: CGSize) -> CGRect {
+            var origin = CGPoint(x: source.minX, y: source.maxY - s.height)
+            origin.x = min(max(origin.x, visible.minX), visible.maxX - s.width)
+            origin.y = min(max(origin.y, visible.minY), visible.maxY - s.height)
+            return CGRect(origin: CGPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: s)
+        }
+        let onScreen = screen.intersects(source)
+        if let axis = PinView.longAxis(for: size) {
+            // 长截图：短边按原大小（太宽 / 太高才缩小），长边最多露出可用区域的 85%
+            let zoom = axis == .vertical ? min(1, visible.width / size.width) : min(1, visible.height / size.height)
+            let shown = axis == .vertical
+                ? CGSize(width: (size.width * zoom).rounded(), height: min((size.height * zoom).rounded(), (visible.height * 0.85).rounded()))
+                : CGSize(width: min((size.width * zoom).rounded(), (visible.width * 0.85).rounded()), height: (size.height * zoom).rounded())
+            return onScreen ? inPlace(shown) : centered(shown)
+        }
+        // 原位、原大小能完整放在屏幕上：就钉在原位（盖住程序坞也没关系，与 Snipaste 一致）
+        let original = CGRect(origin: source.origin, size: size)
+        if screen.contains(original) { return original }
+        // 比可用区域大：缩小到正好放得下；不大但原位不在屏幕上：原大小放中间
+        let factor = min(visible.width / size.width, visible.height / size.height, 1)
+        let fitted = CGSize(width: (size.width * factor).rounded(), height: (size.height * factor).rounded())
+        return factor < 1 || !onScreen ? centered(fitted) : inPlace(fitted)
     }
 
     private func didClose(_ id: ObjectIdentifier) {
