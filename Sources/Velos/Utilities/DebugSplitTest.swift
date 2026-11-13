@@ -33,6 +33,15 @@ enum DebugSplitTest {
             check.note("VelosSettings \(settingsMB) MB")
             check("设置窗口开着时 Velos 本身仍然很小（\(DebugUITest.footprintMB()) MB）", DebugUITest.footprintMB() < idle + 8)
 
+            // VELOS_SPLITTEST_RELAUNCH=1：模拟 VelosSettings 里点了「重新启动 Velos」（由外面检查：旧的 Velos 和 VelosSettings 都退出、
+            // 新的 Velos 启动了一份）。这条消息 Velos 不分是谁发的，这里直接发，走的是和 VelosSettings 发来时同一条路
+            if ProcessInfo.processInfo.environment["VELOS_SPLITTEST_RELAUNCH"] != nil {
+                try? "\(pid)".write(to: dir.appendingPathComponent("settings.pid"), atomically: true, encoding: .utf8)
+                finish(check, dir)
+                SettingsProcess.post(.relaunch)
+                return
+            }
+
             // VELOS_SPLITTEST_QUIT=1：设置窗口开着时退出 Velos（由外面检查设置进程有没有跟着退出）
             if ProcessInfo.processInfo.environment["VELOS_SPLITTEST_QUIT"] != nil {
                 try? "\(pid)".write(to: dir.appendingPathComponent("settings.pid"), atomically: true, encoding: .utf8)
