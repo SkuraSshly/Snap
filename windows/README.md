@@ -1,6 +1,6 @@
 # Velos Windows
 
-[自动识别 x64／x86 的下载器](https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-Windows-Downloader.exe) · [x64 ZIP](https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-3.0.0-preview.20-win-x64.zip) · [x86 ZIP](https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-3.0.0-preview.20-win-x86.zip) · [Windows 发布页](https://github.com/SkuraSshly/Velos/releases/tag/windows-v3.0.0-preview.20)
+旧 ZIP 下载器发布已撤回，Windows 安装版正在调整。
 
 Windows 原生预览版，以 macOS Velos 2.3 为移植基础；本轮钉图和 OCR 候选保护增量对照官方 `v2.4.2` 的 `00b2437575ba224da7e6b60fc7b20111d9af8b7a`。源码、脚本、构建产物均位于 `windows/`，Mac 工作区文件不变。
 
