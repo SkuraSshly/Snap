@@ -1,0 +1,50 @@
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Core checks
+        shell: pwsh
+        run: ./windows/scripts/Test-Velos.ps1
+      - name: Downloader checks
+        shell: pwsh
+        run: |
+          $tests = ./windows/scripts/Build-Downloader.ps1 -Tests
+          & $tests (Join-Path $env:RUNNER_TEMP 'velos-downloader-tests')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build x64 and x86
+        shell: pwsh
+        run: ./windows/scripts/Build-Velos.ps1
+      - name: Package Windows builds
+        shell: pwsh
+        run: |
+          $directory = ./windows/scripts/Package-Velos.ps1 -SkipBuild
+          $downloader = ./windows/scripts/Build-Downloader.ps1
+          Copy-Item -LiteralPath $downloader -Destination $directory
+          ./windows/scripts/New-WindowsManifest.ps1 -ReleaseDirectory $directory
+          "RELEASE_DIR=$directory" >> $env:GITHUB_ENV
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Velos-Windows-build
+          path: |
+            ${{ env.RELEASE_DIR }}/*.zip
+            ${{ env.RELEASE_DIR }}/*.exe
+            ${{ env.RELEASE_DIR }}/*.json
+          retention-days: 14

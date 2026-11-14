@@ -10,10 +10,19 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SkuraSshly/Velos/releases/latest"><b>下载</b></a> ·
+  <a href="https://github.com/SkuraSshly/Velos/releases/latest"><b>macOS 下载</b></a> ·
   <a href="docs/使用说明.md">使用说明</a> ·
   <a href="docs/更新说明.md">更新说明</a> ·
   <a href="docs/卸载说明.md">卸载说明</a>
+</p>
+
+<p align="center">
+  <b>Windows 预览版：</b>
+  <a href="https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-Windows-Downloader.exe">自动下载器（识别 x64／x86）</a> ·
+  <a href="https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-3.0.0-preview.20-win-x64.zip">x64 ZIP</a> ·
+  <a href="https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-3.0.0-preview.20-win-x86.zip">x86 ZIP</a> ·
+  <a href="windows/Windows使用说明.md">Windows 使用说明</a><br>
+  <sub>Windows 10 2004 及更新 · x64／x86 · 预览版 · 下载器校验文件完整性，完整 ZIP 无需安装 .NET</sub>
 </p>
 
 <table align="center">
@@ -84,3 +93,4 @@ open build/Velos.app
 ## 许可证
 
 [MIT](LICENSE)
+

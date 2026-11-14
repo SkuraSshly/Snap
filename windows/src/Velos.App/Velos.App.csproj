@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Velos</AssemblyName>
+    <Version>3.0.0-preview.20</Version>
+    <AssemblyVersion>3.0.0.0</AssemblyVersion>
+    <FileVersion>3.0.0.20</FileVersion>
+    <Product>Velos Windows</Product>
+    <Description>截图、长截图、录屏和截屏翻译</Description>
+    <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
+    <ApplicationIcon>Assets\Velos.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\Velos.ico" />
+    <Resource Include="Assets\Shared\*.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Velos.Core\Velos.Core.csproj" />
+    <ProjectReference Include="..\Velos.Windows\Velos.Windows.csproj" />
+  </ItemGroup>
+</Project>

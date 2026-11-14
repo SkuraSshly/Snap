@@ -1,0 +1,64 @@
+# Velos Windows
+
+[自动识别 x64／x86 的下载器](https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-Windows-Downloader.exe) · [x64 ZIP](https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-3.0.0-preview.20-win-x64.zip) · [x86 ZIP](https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.20/Velos-3.0.0-preview.20-win-x86.zip) · [Windows 发布页](https://github.com/SkuraSshly/Velos/releases/tag/windows-v3.0.0-preview.20)
+
+Windows 原生预览版，以 macOS Velos 2.3 为移植基础；本轮钉图和 OCR 候选保护增量对照官方 `v2.4.2` 的 `00b2437575ba224da7e6b60fc7b20111d9af8b7a`。源码、脚本、构建产物均位于 `windows/`，Mac 工作区文件不变。
+
+- C#、.NET 10 LTS、WPF、Windows SDK、Win32、Windows.Graphics.Capture、Media Foundation、WASAPI。
+- Windows 10 2004（19041）及以上，构建 x64 和 x86；不构建 ARM。
+- 无第三方运行库依赖、无遥测、无自动更新。仅启用并填写凭据的在线翻译引擎可以联网，只发送文字。
+- 自包含单文件 EXE；解压 ZIP 即可运行，无需安装 .NET。
+
+当前版本 preview.20 恢复普通钉图滚轮缩放，保留边缘拖动；长图普通滚轮翻看、Alt＋滚轮缩放，Ctrl＋滚轮调整透明度。修正连续快速滚动偏移、大图低比例跳档、开关轨道反向停顿及多翻译窗口朗读串扰。完整复现与回归见 [本轮检查](完整流程测试.md)。
+
+preview.19 的暖色开关焦点、分项动效及 preview.18 的无白点边缘拖动、原位原尺寸、长轴视口调整和 OCR 保护继续保留；滚轮操作以本版使用说明为准。
+
+preview.17 的右键／键盘缩放方案由本版边缘拖动取代；按钮、开关、侧栏、页面与浮窗的动效保留。
+
+preview.16 修复翻译启用状态、配置草稿、就地反馈、测试取消与原文清空。核心 90 项及双架构 14 组桌面流程通过，并做原生输入检查，见 [完整流程测试](完整流程测试.md)。
+
+preview.15 修正翻译窗口边缘不能拖动：未钉住时取消原生缩放占位，从窗口层处理留白拖动；钉住后保留边缘缩放。见 [改动说明](Mac交互对齐.md)。本轮只编译打包，未运行测试。
+
+preview.14 重写翻译状态模型、识别排版与长截图采集引擎，修正旧译文／流式输出／回退、外部点击、多窗口朗读、预览鼠标穿透及首屏等比显示，详见 [源码移植说明](Mac交互对齐.md)。本轮只构建打包，不运行测试、不启动应用。
+
+preview.13 改为托盘左键直接打开界面、右键保留菜单；继续对照 Mac 修正长图提示／自动滚动状态／预览补帧／中断保存、共用菜单与分段控件、录屏选项条、缩略图与已有视频转 GIF 流程。说明、仍有差异及验证边界见 [Mac 交互对齐](Mac交互对齐.md)。本轮只构建打包，不运行测试、不启动应用进行验收。
+
+preview.12 的长图原像素与翻译窗口改动见 [长图与翻译改进](长图与翻译改进.md)。
+
+preview.11 补 Mac 2.3 的录屏系统事件、暂停说明、启动文件与取消边界、凭据不回填和配置分离、OCR 进程复用及细长三角光标。设置子进程尚待测量收益后决定，二维码仍未实现。历史增量见 [2.3 开发对照](2.3开发对照.md)。
+
+preview.10 已将设置窗口操作改为右上角的最小化、最大化／还原、关闭，保存路径改为使用剩余宽度的单行布局，并统一截图／录屏路径行的间距、按钮与提示。
+
+preview.9 已修复标注白点点击松开后光标方向锁住的问题：移到其他控制点即可随悬停更新方向，无需再次点击；拖动被打断也会释放方向状态。截图和编辑器共同修复，并有该版本的双架构实际鼠标验证。
+
+preview.8 已按小功能检查并修复工具焦点后的 Enter、编辑器缩放与关闭、录屏右键及托盘等待、翻译确认时机、关闭会话释放、视频滚轮寻址、普通文件拖拽和 GIF 取消边界。详见 [逐项功能检查](逐项功能检查.md) 与 [改进记录](改进记录.md)。
+
+已有 DPI 原生暖色光标、可持久化的圆角截图与透明 PNG、Mac 2.3 纯画面长图拼接及显式自动滚动。手动滚动不读取、不拦截滚轮；长截图入口支持全屏。自动滚动的实际速度取决于目标应用对 Windows 高精度滚轮的处理，管理员窗口可能受 UIPI 限制。
+
+使用方法见 [Windows 使用说明](Windows使用说明.md)，移除方法见 [卸载说明](卸载说明.md)。这是公开预览版，未经代码签名；下载和发布说明见 [Windows 下载与发布](下载与发布说明.md)。
+
+## 构建与验证
+
+安装官方 .NET 10 SDK 后，在 PowerShell 中运行：
+
+```powershell
+./windows/scripts/Test-Velos.ps1
+./windows/scripts/Build-Velos.ps1
+./windows/scripts/Test-Desktop.ps1
+./windows/scripts/Package-Velos.ps1
+```
+
+上述依赖 .NET SDK 的脚本支持 `-DotNet` 指向官方便携 SDK。`Build-Velos.ps1` 默认构建 x64 和 x86 的 Release，自测需要指定 `-Configuration Debug`。`Test-Desktop.ps1` 自动先构建 Debug，测试顺序执行，会短暂占用屏幕，只使用合成内容。自测条目和假服务入口不包含在 Release 中。下载器单独使用系统自带的 .NET Framework 编译器，见 [下载器源码说明](downloader/README.md)。
+
+目录：`src/Velos.Core` 为纯逻辑；`src/Velos.Windows` 为系统互操作；`src/Velos.App` 为 WPF UI 和调度；`tests/Velos.Tests` 为零依赖控制台测试；`bin/`、各项目 `bin/obj` 为忽略的本地产物。
+
+## 与 Mac 的明确差异
+
+- 标注和常用操作图标使用统一的原创矢量，匹配 Mac 的工具含义、圆头线条与视觉重量；长截图按钮沿用仓库共享图片。设置使用右上角窗口按钮、圆角卡片和柔和阴影。未复制 SF Symbols；系统字体、原生菜单和背景材质的渲染仍与 macOS 有差异。
+- Windows OCR 依赖本机语言包；自动语言判断使用本机 ELS、文字脚本与系统简繁转换。智能排版移植 Mac 的几何规则；字体、识别框、置信度和语言概率的底层能力仍与 Vision 不同，详见源码移植说明。
+- 当前 Windows OCR 接口没有二维码解码，本版不提供二维码识别；设置项已禁用并解释原因。
+- Windows 没有对应的系统离线翻译及系统词典接口；单词和短语也走用户启用的在线引擎，没有 Key 时仍可离线 OCR、编辑和复制原文。
+- HEVC 取决于系统编码器和驱动，可用时使用，否则回退 H.264；硬件转换已允许，是否实际选择硬件编码由 Media Foundation 决定。1080p 在编码前显式缩放，原生模式不缩放。
+- WGC、受保护内容、独占全屏、远程桌面、声卡与麦克风隐私设置存在系统限制。采集失败会提示，不把黑屏当作成功结果。
+- x86 可用内存较少，超长图和高分辨率录屏建议使用 x64。WOW64 上的 x86 验证不能替代所有 32 位系统、显卡和声卡实机验证。
+- 在线接口已按 Mac 协议移植并作离线签名／响应测试。没有使用用户 Key 向真实服务发送验收请求，各服务商的账号、额度及模型可用性需在设置中用自己的 Key 测试。
