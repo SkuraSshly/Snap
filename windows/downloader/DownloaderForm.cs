@@ -45,6 +45,7 @@ namespace Velos.Downloader
         }
         [DllImport("kernel32.dll")] private static extern void GetNativeSystemInfo(out SystemInfo value);
         [DllImport("ntdll.dll", CharSet = CharSet.Unicode)] private static extern int RtlGetVersion(ref OsInfo value);
+        [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
         [DllImport("shell32.dll")] private static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
         internal static string Architecture()
         {
@@ -57,6 +58,11 @@ namespace Velos.Downloader
             var id = new Guid("374DE290-123F-4565-9164-39C4925E467B"); IntPtr path;
             if (SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out path) != 0) return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             try { return Marshal.PtrToStringUni(path); } finally { Marshal.FreeCoTaskMem(path); }
+        }
+        internal static float WindowScale(IntPtr window)
+        {
+            try { var dpi = GetDpiForWindow(window); return dpi == 0 ? 1f : dpi / 96f; }
+            catch (EntryPointNotFoundException) { return 1f; }
         }
     }
     internal sealed class DownloaderForm : Form
@@ -74,10 +80,11 @@ namespace Velos.Downloader
         private bool busy, closing;
         internal DownloaderForm()
         {
+            SuspendLayout();
             Text = "Velos Windows 下载器"; ClientSize = new Size(540, 370); MinimumSize = Size;
             FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false; StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.FromArgb(255, 246, 236); ForeColor = Color.FromArgb(84, 61, 46);
-            Font = new Font("Microsoft YaHei UI", 10); AutoScaleDimensions = new SizeF(96, 96); AutoScaleMode = AutoScaleMode.Dpi;
+            Font = new Font("Microsoft YaHei UI", 10); AutoScaleMode = AutoScaleMode.None;
             var icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); if (icon != null) Icon = icon;
             var heading = new Label { Text = "Velos for Windows", Font = new Font(Font.FontFamily, 22, FontStyle.Bold), AutoSize = true, Location = new Point(28, 24) };
             Controls.Add(heading);
@@ -115,6 +122,11 @@ namespace Velos.Downloader
                 if (busy) { closing = true; e.Cancel = true; if (operation != null) operation.Cancel(); }
             };
             FormClosed += delegate { client.Dispose(); if (Icon != null) Icon.Dispose(); };
+            var scale = NativeSystem.WindowScale(Handle);
+            if (scale != 1f) Scale(new SizeF(scale, scale));
+            ClientSize = new Size((int)Math.Round(540 * scale), (int)Math.Round(370 * scale));
+            ResumeLayout(false);
+            PerformLayout();
         }
         private string SelectedArchitecture { get { return recommended == "x64" && architecture.SelectedIndex == 0 ? "x64" : "x86"; } }
         private void BeginOperation()
