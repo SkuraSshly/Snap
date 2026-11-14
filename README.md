@@ -16,6 +16,12 @@
   <a href="docs/卸载说明.md">卸载说明</a>
 </p>
 
+<p align="center">
+  <b>Windows 预览版：</b>
+  <a href="https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.21/Velos-Setup.exe"><b>下载安装程序 Velos-Setup.exe</b></a> ·
+  <a href="windows/Windows使用说明.md">Windows 使用说明</a><br>
+  <sub>打开后自动识别 x64／x86、下载并安装，无需解压 · Windows 10 2004 及更新</sub>
+</p>
 <table align="center">
   <tr>
     <td align="center"><a href="docs/images/settings-general.png"><img src="docs/images/settings-general.png" height="200" alt="设置"></a><br><sub><b>设置</b>：温暖、一目了然</sub></td>

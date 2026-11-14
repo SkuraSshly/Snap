@@ -5,9 +5,9 @@
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
     <AssemblyName>Velos</AssemblyName>
-    <Version>3.0.0-preview.20</Version>
+    <Version>3.0.0-preview.21</Version>
     <AssemblyVersion>3.0.0.0</AssemblyVersion>
-    <FileVersion>3.0.0.20</FileVersion>
+    <FileVersion>3.0.0.21</FileVersion>
     <Product>Velos Windows</Product>
     <Description>截图、长截图、录屏和截屏翻译</Description>
     <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>

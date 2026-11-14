@@ -1,13 +1,15 @@
 # Velos Windows
 
-旧 ZIP 下载器发布已撤回，Windows 安装版正在调整。
+[Windows 安装程序 Velos-Setup.exe](https://github.com/SkuraSshly/Velos/releases/download/windows-v3.0.0-preview.21/Velos-Setup.exe) · [Windows 发布页](https://github.com/SkuraSshly/Velos/releases/tag/windows-v3.0.0-preview.21)
+
+preview.21 改为正常的 Windows 在线安装流程：打开安装 EXE 后自动识别 x64／x86、下载程序并安装，完成后直接启动。添加开始菜单和「已安装的应用」卸载入口，不需要选择 ZIP 或解压。旧 preview.20 的 ZIP 下载器发布已撤回。说明见 [安装程序源码](setup/README.md)。
 
 Windows 原生预览版，以 macOS Velos 2.3 为移植基础；本轮钉图和 OCR 候选保护增量对照官方 `v2.4.2` 的 `00b2437575ba224da7e6b60fc7b20111d9af8b7a`。源码、脚本、构建产物均位于 `windows/`，Mac 工作区文件不变。
 
 - C#、.NET 10 LTS、WPF、Windows SDK、Win32、Windows.Graphics.Capture、Media Foundation、WASAPI。
 - Windows 10 2004（19041）及以上，构建 x64 和 x86；不构建 ARM。
 - 无第三方运行库依赖、无遥测、无自动更新。仅启用并填写凭据的在线翻译引擎可以联网，只发送文字。
-- 自包含单文件 EXE；解压 ZIP 即可运行，无需安装 .NET。
+- 自包含单文件 EXE；在线安装程序自动下载并安装，无需安装 .NET。
 
 当前版本 preview.20 恢复普通钉图滚轮缩放，保留边缘拖动；长图普通滚轮翻看、Alt＋滚轮缩放，Ctrl＋滚轮调整透明度。修正连续快速滚动偏移、大图低比例跳档、开关轨道反向停顿及多翻译窗口朗读串扰。完整复现与回归见 [本轮检查](完整流程测试.md)。
 
@@ -45,10 +47,10 @@ preview.8 已按小功能检查并修复工具焦点后的 Enter、编辑器缩�
 ./windows/scripts/Test-Velos.ps1
 ./windows/scripts/Build-Velos.ps1
 ./windows/scripts/Test-Desktop.ps1
-./windows/scripts/Package-Velos.ps1
+./windows/scripts/Package-Setup.ps1
 ```
 
-上述依赖 .NET SDK 的脚本支持 `-DotNet` 指向官方便携 SDK。`Build-Velos.ps1` 默认构建 x64 和 x86 的 Release，自测需要指定 `-Configuration Debug`。`Test-Desktop.ps1` 自动先构建 Debug，测试顺序执行，会短暂占用屏幕，只使用合成内容。自测条目和假服务入口不包含在 Release 中。下载器单独使用系统自带的 .NET Framework 编译器，见 [下载器源码说明](downloader/README.md)。
+上述依赖 .NET SDK 的脚本支持 `-DotNet` 指向官方便携 SDK。`Build-Velos.ps1` 默认构建 x64 和 x86 的 Release，自测需要指定 `-Configuration Debug`。`Test-Desktop.ps1` 自动先构建 Debug，测试顺序执行，会短暂占用屏幕，只使用合成内容。自测条目和假服务入口不包含在 Release 中。安装器单独使用系统自带的 .NET Framework 编译器，见 [安装器源码说明](setup/README.md)。
 
 目录：`src/Velos.Core` 为纯逻辑；`src/Velos.Windows` 为系统互操作；`src/Velos.App` 为 WPF UI 和调度；`tests/Velos.Tests` 为零依赖控制台测试；`bin/`、各项目 `bin/obj` 为忽略的本地产物。
 

@@ -23,11 +23,11 @@ jobs:
       - name: Core checks
         shell: pwsh
         run: ./windows/scripts/Test-Velos.ps1
-      - name: Downloader checks
+      - name: Setup checks
         shell: pwsh
         run: |
-          $tests = ./windows/scripts/Build-Downloader.ps1 -Tests
-          & $tests (Join-Path $env:RUNNER_TEMP 'velos-downloader-tests')
+          $tests = ./windows/scripts/Build-Setup.ps1 -Tests
+          & $tests (Join-Path $env:RUNNER_TEMP 'velos-setup-tests')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build x64 and x86
         shell: pwsh
@@ -35,16 +35,13 @@ jobs:
       - name: Package Windows builds
         shell: pwsh
         run: |
-          $directory = ./windows/scripts/Package-Velos.ps1 -SkipBuild
-          $downloader = ./windows/scripts/Build-Downloader.ps1
-          Copy-Item -LiteralPath $downloader -Destination $directory
-          ./windows/scripts/New-WindowsManifest.ps1 -ReleaseDirectory $directory
+          $directory = ./windows/scripts/Package-Setup.ps1 -SkipBuild
           "RELEASE_DIR=$directory" >> $env:GITHUB_ENV
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Velos-Windows-build
           path: |
-            ${{ env.RELEASE_DIR }}/*.zip
             ${{ env.RELEASE_DIR }}/*.exe
             ${{ env.RELEASE_DIR }}/*.json
+            ${{ env.RELEASE_DIR }}/*.txt
           retention-days: 14

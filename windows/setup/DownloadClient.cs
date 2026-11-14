@@ -10,7 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
-namespace Velos.Downloader
+namespace Velos.Setup
 {
     public sealed class ReleaseAsset
     {
@@ -32,13 +32,13 @@ namespace Velos.Downloader
         {
             if (json == null || Encoding.UTF8.GetByteCount(json) > 65536) throw new InvalidDataException("发布信息过大。");
             var manifest = new JavaScriptSerializer { MaxJsonLength = 65536 }.Deserialize<ReleaseManifest>(json);
-            if (manifest == null || manifest.schema != 1 || manifest.version != BuildInfo.Version || manifest.tag != BuildInfo.Tag ||
+            if (manifest == null || manifest.schema != 2 || manifest.version != BuildInfo.Version || manifest.tag != BuildInfo.Tag ||
                 manifest.releaseUrl != BuildInfo.ReleaseUrl || manifest.minimumWindowsBuild != 19041 || manifest.assets == null)
                 throw new InvalidDataException("发布信息与此下载器不匹配，请从发布页重新下载。");
             foreach (var architecture in new[] { "x64", "x86" })
             {
                 ReleaseAsset asset;
-                var name = "Velos-" + BuildInfo.Version + "-win-" + architecture + ".zip";
+                var name = "Velos-" + BuildInfo.Version + "-win-" + architecture + ".exe";
                 if (!manifest.assets.TryGetValue(architecture, out asset) || asset == null || asset.name != name ||
                     asset.url != BuildInfo.DownloadRoot + name || asset.size <= 0 || asset.size > 536870912 ||
                     asset.sha256 == null || !Regex.IsMatch(asset.sha256, "\\A[0-9a-fA-F]{64}\\z"))
@@ -65,7 +65,7 @@ namespace Velos.Downloader
         internal DownloadClient(HttpMessageHandler handler)
         {
             client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(20) };
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("Velos-Windows-Downloader/1.0");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Velos-Setup/2.0");
         }
         internal static string Architecture(ushort nativeArchitecture)
         {
@@ -90,7 +90,7 @@ namespace Velos.Downloader
                 if (!response.IsSuccessStatusCode)
                 {
                     response.Dispose();
-                    if (code == 404) throw new IOException("此版本暂不可下载，请稍后重试或打开发布页。");
+                    if (code == 404) throw new IOException("暂时无法获取安装文件，请稍后重试。");
                     throw new IOException("GitHub 暂时无法下载（HTTP " + code + "），请稍后重试。");
                 }
                 return response;
@@ -102,7 +102,7 @@ namespace Velos.Downloader
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
                 timeout.CancelAfter(TimeSpan.FromSeconds(30));
-                using (var response = await GetAsync(new Uri(BuildInfo.DownloadRoot + "Velos-Windows.json"), timeout.Token).ConfigureAwait(false))
+                using (var response = await GetAsync(new Uri(BuildInfo.DownloadRoot + "Velos-Install.json"), timeout.Token).ConfigureAwait(false))
                 using (var input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                 using (var buffer = new MemoryStream())
                 using (timeout.Token.Register(response.Dispose))
